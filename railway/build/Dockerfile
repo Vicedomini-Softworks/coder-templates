@@ -172,6 +172,14 @@ RUN cp -rT /home/coder /etc/skel \
     && mkdir -p /home/coder \
     && chown coder:coder /home/coder
 
+# Final upgrade pass: the first apt-get upgrade at the top of this file
+# only covers Ubuntu's own repos. By this point several more repos have
+# been registered (Claude Code, cloudflared, cloudflare-warp, Tailscale),
+# so re-run update+upgrade to pick up any patches for those too.
+RUN apt-get update \
+    && apt-get upgrade -y \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY entrypoint.sh /coder-entrypoint.sh
 RUN chmod +x /coder-entrypoint.sh
 

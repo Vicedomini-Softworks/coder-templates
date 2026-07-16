@@ -31,3 +31,29 @@ jobs:
           tags: |
             ${{ env.IMAGE_NAME }}:latest
             ${{ env.IMAGE_NAME }}:${{ github.sha }}
+
+  update-coder:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    env:
+      CODER_URL: https://${{ vars.CODER_DOMAIN || secrets.CODER_DOMAIN }}
+      CODER_SESSION_TOKEN: ${{ secrets.CODER_SESSION_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Coder CLI
+        run: curl -fsSL https://coder.com/install.sh | sh
+
+      - name: Push new template version
+        working-directory: railway
+        run: |
+          coder templates push railway \
+            --directory . \
+            --variable "railway_token=${{ secrets.RAILWAY_TOKEN }}" \
+            --message "CI: image ${{ github.sha }}" \
+            --yes
+
+      # Deliberately no auto-update/restart of running workspaces here:
+      # each workspace owner decides when to pick up the new template
+      # version (`coder update <workspace>`, or their own auto-update
+      # policy), since a restart interrupts whatever they're doing.

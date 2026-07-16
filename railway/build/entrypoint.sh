@@ -8,6 +8,16 @@ if [ "$(id -u)" = "0" ]; then
   chown coder:coder /home/coder 2> /dev/null || true
 fi
 
+# Best-effort background start of the VPN/Zero Trust daemons, so
+# `tailscale` and `warp-cli` work without the user having to remember to
+# start them by hand each session. Both need NET_ADMIN + /dev/net/tun,
+# which the container runtime may not grant - failures here are logged
+# but must never block the workspace from starting.
+if [ "$(id -u)" = "0" ]; then
+  command -v tailscaled > /dev/null 2>&1 && tailscaled > /tmp/tailscaled.log 2>&1 &
+  command -v warp-svc > /dev/null 2>&1 && warp-svc > /tmp/warp-svc.log 2>&1 &
+fi
+
 # Seed home directory with skeleton files on first start.
 if [ ! -f /home/coder/.init_done ]; then
   cp -rT /etc/skel /home/coder 2> /dev/null || true

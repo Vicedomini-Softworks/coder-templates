@@ -15,7 +15,11 @@ RUN apt-get update \
         gnupg \
         unzip \
         zip \
+        zsh \
     && rm -rf /var/lib/apt/lists/*
+
+# zsh as the coder user's default shell.
+RUN usermod -s "$(command -v zsh)" coder
 
 # --- Claude Code CLI ---
 # https://code.claude.com/docs/en/setup#install-with-linux-package-managers
@@ -83,6 +87,14 @@ RUN . /etc/os-release \
     && apt-get install -y --no-install-recommends tailscale \
     && rm -rf /var/lib/apt/lists/*
 
+# --- Oh My Zsh ---
+# Installed before the SDKMAN block below appends its own lines to
+# .zshrc, so Oh My Zsh's template is in place first and our tool-init
+# lines land after it, not the other way around (Oh My Zsh's installer
+# overwrites an existing .zshrc unless told to keep it).
+USER coder
+RUN sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended --keep-zshrc
+
 # --- SDKMAN! (Maven 3.9.9, Temurin JDK 8/11/21, JBang) + Camel JBang kit,
 #     and NVM (Node 22) ---
 # Installed as the real `coder` user (not root with a faked $HOME): JBang
@@ -96,7 +108,10 @@ RUN . /etc/os-release \
 # volume-mount reseed in entrypoint.sh's `cp -rT /etc/skel /home/coder` on
 # a workspace's first boot, and /home/coder itself is reset to empty
 # afterward so the image doesn't ship the ~1GB of tooling twice.
-USER coder
+#
+# coder's default shell is zsh (set above), so this block also wires
+# SDKMAN/JBang/NVM into .zshrc, not just the .bashrc the installers
+# default to.
 RUN <<'EOF'
 #!/usr/bin/env bash
 set -e
@@ -129,6 +144,26 @@ export NVM_DIR="$HOME/.nvm"
 . "$NVM_DIR/nvm.sh"
 nvm install 22
 nvm alias default 22
+
+# The installers above only reliably wire themselves into .bashrc: SDKMAN
+# only appends to .zshrc if it already exists at install time (it doesn't
+# yet, here), and NVM/JBang key off the currently running shell (bash, in
+# this RUN step) rather than checking for other rc files. Since coder is
+# now a zsh user, write the same init lines into .zshrc explicitly rather
+# than depend on each installer's shell detection.
+cat >> "$HOME/.zshrc" <<'ZSHRC_EOF'
+
+# --- SDKMAN, JBang, NVM ---
+export SDKMAN_DIR="$HOME/.sdkman"
+[[ -s "$HOME/.sdkman/bin/sdkman-init.sh" ]] && source "$HOME/.sdkman/bin/sdkman-init.sh"
+
+alias j!=jbang
+export PATH="$HOME/.jbang/bin:$PATH"
+
+export NVM_DIR="$HOME/.nvm"
+[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"
+ZSHRC_EOF
 EOF
 
 USER root

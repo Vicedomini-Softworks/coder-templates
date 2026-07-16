@@ -50,6 +50,7 @@ jobs:
           coder templates push railway \
             --directory . \
             --variable "railway_token=${{ secrets.RAILWAY_TOKEN }}" \
+            --variable "workspace_image=docker.io/${{ env.IMAGE_NAME }}:${{ github.sha }}" \
             --message "CI: image ${{ github.sha }}" \
             --yes
 

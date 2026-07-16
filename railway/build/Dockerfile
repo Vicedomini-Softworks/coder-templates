@@ -83,22 +83,32 @@ RUN . /etc/os-release \
     && apt-get install -y --no-install-recommends tailscale \
     && rm -rf /var/lib/apt/lists/*
 
-# --- SDKMAN! (Maven 3.9.9, Temurin JDK 8/11/21, JBang) + Camel JBang kit ---
-# Installed into /etc/skel (not /home/coder) so it survives the volume-mount
-# reseed in entrypoint.sh's `cp -rT /etc/skel /home/coder` on a workspace's
-# first boot. Java identifiers are resolved to the latest Temurin patch for
-# each major at build time rather than hardcoded, since SDKMAN doesn't
-# accept bare "8-tem"/"11-tem" short forms for older majors.
+# --- SDKMAN! (Maven 3.9.9, Temurin JDK 8/11/21, JBang) + Camel JBang kit,
+#     and NVM (Node 22) ---
+# Installed as the real `coder` user (not root with a faked $HOME): JBang
+# and Maven are JVM/Java-tooling and resolve their data/repo dirs from the
+# JVM's `user.home`, which is derived from the OS passwd entry rather than
+# the $HOME env var - overriding $HOME while running as root still bakes
+# /root/... paths into things like JBang's dependency cache. Running as
+# coder makes user.home correctly resolve to /home/coder.
+#
+# Everything then gets copied into /etc/skel so it survives the
+# volume-mount reseed in entrypoint.sh's `cp -rT /etc/skel /home/coder` on
+# a workspace's first boot, and /home/coder itself is reset to empty
+# afterward so the image doesn't ship the ~1GB of tooling twice.
+USER coder
 RUN <<'EOF'
 #!/usr/bin/env bash
 set -e
-export HOME=/etc/skel
 curl -s "https://get.sdkman.io" | bash
 # Every install after the first prompts "set as default? (Y/n)" on stdin;
 # auto-answer so a non-interactive build doesn't hang on EOF.
-sed -i "s/sdkman_auto_answer=false/sdkman_auto_answer=true/" /etc/skel/.sdkman/etc/config
-source /etc/skel/.sdkman/bin/sdkman-init.sh
+sed -i "s/sdkman_auto_answer=false/sdkman_auto_answer=true/" "$HOME/.sdkman/etc/config"
+source "$HOME/.sdkman/bin/sdkman-init.sh"
 
+# Java identifiers are resolved to the latest Temurin patch for each major
+# at build time rather than hardcoded, since SDKMAN doesn't accept bare
+# "8-tem"/"11-tem" short forms for older majors.
 for major in 8 11 21; do
   id=$(sdk list java 2>&1 | grep -E "\| ${major}\.[0-9.]+ *\| tem " | head -1 | grep -oE "[0-9]+\.[0-9.]+-tem")
   sdk install java "$id" < /dev/null
@@ -113,20 +123,19 @@ sdk install jbang < /dev/null
 # JBang app. `jbang trust add` is required for non-interactive installs.
 jbang trust add https://github.com/apache/camel/
 jbang app install camel@apache/camel
-EOF
 
-# --- NVM (Node 22) ---
-# Same /etc/skel rationale as SDKMAN above.
-RUN <<'EOF'
-#!/usr/bin/env bash
-set -e
-export HOME=/etc/skel
 curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash
 export NVM_DIR="$HOME/.nvm"
 . "$NVM_DIR/nvm.sh"
 nvm install 22
 nvm alias default 22
 EOF
+
+USER root
+RUN cp -rT /home/coder /etc/skel \
+    && rm -rf /home/coder \
+    && mkdir -p /home/coder \
+    && chown coder:coder /home/coder
 
 COPY entrypoint.sh /coder-entrypoint.sh
 RUN chmod +x /coder-entrypoint.sh

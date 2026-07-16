@@ -14,6 +14,7 @@ RUN apt-get update \
         curl \
         gnupg \
         unzip \
+        zip \
     && rm -rf /var/lib/apt/lists/*
 
 # --- Claude Code CLI ---
@@ -81,6 +82,51 @@ RUN . /etc/os-release \
     && apt-get update \
     && apt-get install -y --no-install-recommends tailscale \
     && rm -rf /var/lib/apt/lists/*
+
+# --- SDKMAN! (Maven 3.9.9, Temurin JDK 8/11/21, JBang) + Camel JBang kit ---
+# Installed into /etc/skel (not /home/coder) so it survives the volume-mount
+# reseed in entrypoint.sh's `cp -rT /etc/skel /home/coder` on a workspace's
+# first boot. Java identifiers are resolved to the latest Temurin patch for
+# each major at build time rather than hardcoded, since SDKMAN doesn't
+# accept bare "8-tem"/"11-tem" short forms for older majors.
+RUN <<'EOF'
+#!/usr/bin/env bash
+set -e
+export HOME=/etc/skel
+curl -s "https://get.sdkman.io" | bash
+# Every install after the first prompts "set as default? (Y/n)" on stdin;
+# auto-answer so a non-interactive build doesn't hang on EOF.
+sed -i "s/sdkman_auto_answer=false/sdkman_auto_answer=true/" /etc/skel/.sdkman/etc/config
+source /etc/skel/.sdkman/bin/sdkman-init.sh
+
+for major in 8 11 21; do
+  id=$(sdk list java 2>&1 | grep -E "\| ${major}\.[0-9.]+ *\| tem " | head -1 | grep -oE "[0-9]+\.[0-9.]+-tem")
+  sdk install java "$id" < /dev/null
+done
+id21=$(sdk list java 2>&1 | grep -E "\| 21\.[0-9.]+ *\| tem " | head -1 | grep -oE "[0-9]+\.[0-9.]+-tem")
+sdk default java "$id21"
+
+sdk install maven 3.9.9 < /dev/null
+sdk install jbang < /dev/null
+
+# Camel JBang kit: the `camel` CLI (camel init/run/...), installed as a
+# JBang app. `jbang trust add` is required for non-interactive installs.
+jbang trust add https://github.com/apache/camel/
+jbang app install camel@apache/camel
+EOF
+
+# --- NVM (Node 22) ---
+# Same /etc/skel rationale as SDKMAN above.
+RUN <<'EOF'
+#!/usr/bin/env bash
+set -e
+export HOME=/etc/skel
+curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash
+export NVM_DIR="$HOME/.nvm"
+. "$NVM_DIR/nvm.sh"
+nvm install 22
+nvm alias default 22
+EOF
 
 COPY entrypoint.sh /coder-entrypoint.sh
 RUN chmod +x /coder-entrypoint.sh

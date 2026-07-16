@@ -15,6 +15,19 @@ if [ ! -f /home/coder/.init_done ]; then
   if [ "$(id -u)" = "0" ]; then
     chown -R coder:coder /home/coder 2> /dev/null || true
   fi
+else
+  # Home already seeded on a previous boot, possibly from an older
+  # image. Backfill anything a newer image added to /etc/skel (new
+  # tool installs etc.) without touching files the user already has -
+  # cp -n skips any destination path that already exists. Runs as
+  # coder directly so newly added files land correctly owned without
+  # a recursive chown of the whole (possibly multi-GB) home dir on
+  # every single start.
+  if [ "$(id -u)" = "0" ]; then
+    su -s /bin/bash coder -c 'cp -rTn /etc/skel /home/coder 2> /dev/null || true'
+  else
+    cp -rTn /etc/skel /home/coder 2> /dev/null || true
+  fi
 fi
 
 # The Coder init script is passed base64-encoded to avoid shell

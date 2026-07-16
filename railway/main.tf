@@ -20,9 +20,11 @@
 #     RAILWAY_RUN_UID         "0" so the entrypoint can chown the
 #                             root-owned Railway volume mount and then
 #                             drop to the coder user.
-#   The default image (ghcr.io/bpmct/railway-coder-workspace:latest) is
-#   codercom/enterprise-base:ubuntu plus a small entrypoint. Source at
-#   https://github.com/bpmct/coder-railway/tree/main/build.
+#   The default image (docker.io/vicedominisoftworks/railway-vicedominidev:latest)
+#   is codercom/enterprise-base:ubuntu plus a small entrypoint and a set of
+#   preinstalled CLIs (Claude Code, Cursor, Kiro, cloudflared, cloudflare-warp,
+#   Tailscale). Built and pushed by .github/workflows/build-workspace-image.yml
+#   from ./build on every push to build/**. Source at ./build/Dockerfile.
 #
 # Lifecycle:
 #   Persistent (survive stop): project, service, volume, project token
@@ -66,13 +68,13 @@ variable "enable_project_management" {
 
 variable "workspace_image" {
   type        = string
-  default     = "ghcr.io/bpmct/railway-coder-workspace:latest"
+  default     = "docker.io/vicedominisoftworks/railway-vicedominidev:latest"
   description = <<-EOT
     Pre-built workspace image. The image's ENTRYPOINT must consume the
     CODER_INIT_SCRIPT_B64, CODER_AGENT_TOKEN, and RAILWAY_RUN_UID env
-    vars. The default image is public; see
-    https://github.com/bpmct/coder-railway/tree/main/build for the
-    Dockerfile if you want to build your own.
+    vars. The default image is public; see ./build/Dockerfile for the
+    source and .github/workflows/build-workspace-image.yml for how it's
+    built and pushed to Docker Hub.
   EOT
 }
 
@@ -82,7 +84,7 @@ variable "image_registry_username" {
   description = <<-EOT
     Optional registry username for private image pulls. Leave empty
     when pointing at the public default image
-    (ghcr.io/bpmct/railway-coder-workspace) or any other public
+    (docker.io/vicedominisoftworks/railway-vicedominidev) or any other public
     registry.
   EOT
 }
@@ -94,7 +96,7 @@ variable "image_registry_password" {
   description = <<-EOT
     Optional registry password / PAT for private image pulls. Leave
     empty when pointing at the public default image
-    (ghcr.io/bpmct/railway-coder-workspace) or any other public
+    (docker.io/vicedominisoftworks/railway-vicedominidev) or any other public
     registry.
   EOT
 }

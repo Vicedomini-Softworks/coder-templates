@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
     paths:
-      - "railway/build/**"
+      - "railway/**"
       - ".github/workflows/build-workspace-image.yml"
   workflow_dispatch: {}
 

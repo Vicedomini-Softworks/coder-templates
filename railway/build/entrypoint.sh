@@ -40,6 +40,28 @@ else
   fi
 fi
 
+# Preinstall the optional SSH deploy key (base64-encoded, PEM, may be
+# any key type) so `git clone` over SSH works against private repos
+# without further setup. Runs on every start, after skel seeding, so
+# it always wins and picks up key rotations. accept-new auto-trusts a
+# host's key on first connect instead of prompting, since there's no
+# interactive terminal here.
+if [ -n "${GIT_SSH_KEY_B64:-}" ]; then
+  install -d -m 700 -o coder -g coder /home/coder/.ssh
+  echo "$GIT_SSH_KEY_B64" | base64 -d > /home/coder/.ssh/git_deploy_key
+  chmod 600 /home/coder/.ssh/git_deploy_key
+  chown coder:coder /home/coder/.ssh/git_deploy_key
+  if ! grep -q "IdentityFile ~/.ssh/git_deploy_key" /home/coder/.ssh/config 2> /dev/null; then
+    cat >> /home/coder/.ssh/config <<-EOT
+	Host *
+	  IdentityFile ~/.ssh/git_deploy_key
+	  StrictHostKeyChecking accept-new
+	EOT
+    chmod 600 /home/coder/.ssh/config
+    chown coder:coder /home/coder/.ssh/config
+  fi
+fi
+
 # The Coder init script is passed base64-encoded to avoid shell
 # escaping issues with multi-line environment variable values.
 if [ -n "$CODER_INIT_SCRIPT_B64" ]; then

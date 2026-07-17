@@ -14,6 +14,6 @@ SERVICE_ID=$(echo "$SE" | awk '{print $1}')
 ENV_ID=$(echo "$SE" | awk '{print $2}')
 [ -z "$SERVICE_ID" ] || [ -z "$ENV_ID" ] && exit 0
 
-for VAR_NAME in CODER_INIT_SCRIPT_B64 CODER_AGENT_TOKEN RAILWAY_RUN_UID; do
+for VAR_NAME in CODER_INIT_SCRIPT_B64 CODER_AGENT_TOKEN RAILWAY_RUN_UID GIT_SSH_KEY_B64; do
   gql "mutation { variableDelete(input: { projectId: \\\"$PROJECT_ID\\\", serviceId: \\\"$SERVICE_ID\\\", environmentId: \\\"$ENV_ID\\\", name: \\\"$VAR_NAME\\\" }) }" || true
 done

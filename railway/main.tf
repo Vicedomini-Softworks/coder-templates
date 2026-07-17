@@ -101,6 +101,18 @@ variable "image_registry_password" {
   EOT
 }
 
+variable "git_ssh_private_key" {
+  type        = string
+  default     = ""
+  sensitive   = true
+  description = <<-EOT
+    Optional SSH private key (PEM, full contents including headers),
+    preinstalled into ~/.ssh in every workspace so `git clone`/`git-clone`
+    module can authenticate against private repos over SSH. Leave empty
+    to skip.
+  EOT
+}
+
 provider "coder" {}
 
 locals {
@@ -337,6 +349,7 @@ resource "terraform_data" "env_vars" {
       STATE_DIR             = local.state_dir
       CODER_INIT_SCRIPT_B64 = base64encode(coder_agent.main.init_script)
       CODER_AGENT_TOKEN     = coder_agent.main.token
+      GIT_SSH_KEY_B64       = base64encode(var.git_ssh_private_key)
     }
   }
 

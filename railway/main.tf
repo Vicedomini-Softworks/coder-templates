@@ -147,6 +147,16 @@ data "coder_parameter" "region" {
   }
 }
 
+data "coder_parameter" "git_repo_url" {
+  name         = "git_repo_url"
+  display_name = "Git repository to clone"
+  description  = "Optional. Clone this repo into the workspace home dir before login (e.g. https://github.com/org/repo). Leave blank to skip."
+  icon         = "/icon/git.svg"
+  type         = "string"
+  default      = ""
+  mutable      = true
+}
+
 # ---------------------------------------------------------------------------
 # Coder agent
 # ---------------------------------------------------------------------------
@@ -476,6 +486,17 @@ module "code-server" {
   version  = "~> 1.5"
   agent_id = coder_agent.main.id
   order    = 1
+}
+
+# Optional: pre-checkout a git repo into the workspace home dir on start,
+# before the user logs in. Skipped entirely when git_repo_url is blank.
+module "git-clone" {
+  count    = data.coder_workspace.me.start_count > 0 && trimspace(data.coder_parameter.git_repo_url.value) != "" ? 1 : 0
+  source   = "registry.coder.com/coder/git-clone/coder"
+  version  = "~> 1.0"
+  agent_id = coder_agent.main.id
+  url      = data.coder_parameter.git_repo_url.value
+  base_dir = "~/"
 }
 
 # Optional: install the Railway CLI on workspace start when project

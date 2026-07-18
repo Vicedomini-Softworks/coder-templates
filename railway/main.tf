@@ -101,18 +101,6 @@ variable "image_registry_password" {
   EOT
 }
 
-variable "git_ssh_private_key" {
-  type        = string
-  default     = ""
-  sensitive   = true
-  description = <<-EOT
-    Optional SSH private key (PEM, full contents including headers),
-    preinstalled into ~/.ssh in every workspace so `git clone`/`git-clone`
-    module can authenticate against private repos over SSH. Leave empty
-    to skip.
-  EOT
-}
-
 provider "coder" {}
 
 locals {
@@ -165,6 +153,23 @@ data "coder_parameter" "git_repo_url" {
   description  = "Optional. Clone this repo into the workspace home dir before login (e.g. https://github.com/org/repo). Leave blank to skip."
   icon         = "/icon/git.svg"
   type         = "string"
+  default      = ""
+  mutable      = true
+}
+
+data "coder_parameter" "git_ssh_private_key" {
+  name         = "git_ssh_private_key"
+  display_name = "Git SSH deploy key"
+  description  = <<-EOT
+    Optional. SSH private key (full PEM, any key type), preinstalled
+    into ~/.ssh so `git clone` over SSH can authenticate against
+    private repos. Visible in plain text to this workspace's owner and
+    template admins - use a repo-scoped deploy key, not a personal key.
+    Leave blank to skip.
+  EOT
+  icon         = "/icon/git.svg"
+  type         = "string"
+  form_type    = "textarea"
   default      = ""
   mutable      = true
 }
@@ -349,7 +354,7 @@ resource "terraform_data" "env_vars" {
       STATE_DIR             = local.state_dir
       CODER_INIT_SCRIPT_B64 = base64encode(coder_agent.main.init_script)
       CODER_AGENT_TOKEN     = coder_agent.main.token
-      GIT_SSH_KEY_B64       = base64encode(var.git_ssh_private_key)
+      GIT_SSH_KEY_B64       = base64encode(data.coder_parameter.git_ssh_private_key.value)
     }
   }
 

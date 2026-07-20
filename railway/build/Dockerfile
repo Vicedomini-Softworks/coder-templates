@@ -87,6 +87,30 @@ RUN . /etc/os-release \
     && apt-get install -y --no-install-recommends tailscale \
     && rm -rf /var/lib/apt/lists/*
 
+# --- Podman (rootless) as a Docker-in-Docker substitute ---
+# Railway containers run unprivileged with no way to grant
+# --privileged/SYS_ADMIN, so a real dockerd can't run inside the
+# workspace. Podman is daemonless and works rootless via user
+# namespaces; podman-docker installs a `docker` CLI shim that forwards
+# to it, so `docker build`/`docker run`/`docker ps` keep working
+# as-is for testing. Removes any docker.io/docker-ce packages the base
+# image may ship first, since podman-docker conflicts with them over
+# ownership of /usr/bin/docker.
+RUN apt-get update \
+    && (apt-get remove -y docker.io docker-ce docker-ce-cli docker-buildx-plugin docker-compose-plugin containerd containerd.io || true) \
+    && apt-get install -y --no-install-recommends \
+        podman \
+        podman-docker \
+        fuse-overlayfs \
+        slirp4netns \
+        uidmap \
+    && rm -rf /var/lib/apt/lists/*
+
+# Rootless podman needs a UID/GID subordinate range for the coder user
+# to map container UIDs into.
+RUN (grep -q "^coder:" /etc/subuid || echo "coder:100000:65536" >> /etc/subuid) \
+    && (grep -q "^coder:" /etc/subgid || echo "coder:100000:65536" >> /etc/subgid)
+
 # --- Oh My Zsh ---
 # Installed before the SDKMAN block below appends its own lines to
 # .zshrc, so Oh My Zsh's template is in place first and our tool-init

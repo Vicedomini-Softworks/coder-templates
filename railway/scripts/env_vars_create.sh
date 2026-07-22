@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Upsert the required env vars on the workspace service:
-# CODER_INIT_SCRIPT_B64, CODER_AGENT_TOKEN, RAILWAY_RUN_UID, GIT_SSH_KEY_B64.
+# CODER_INIT_SCRIPT_B64, CODER_AGENT_TOKEN, RAILWAY_RUN_UID.
 #
 # Runs BEFORE image_deploy so the first deployment already has the
 # correct values. variableUpsert on a connected service would trigger
@@ -10,7 +10,6 @@
 #   API, TOKEN, PROJECT_NAME, STATE_DIR
 #   CODER_INIT_SCRIPT_B64 - base64 of agent init script
 #   CODER_AGENT_TOKEN     - agent token
-#   GIT_SSH_KEY_B64       - base64 of optional SSH private key, "" if unset
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
@@ -69,4 +68,3 @@ upsert_var() {
 upsert_var "CODER_INIT_SCRIPT_B64" "$CODER_INIT_SCRIPT_B64"
 upsert_var "CODER_AGENT_TOKEN" "$CODER_AGENT_TOKEN"
 upsert_var "RAILWAY_RUN_UID" "0"
-upsert_var "GIT_SSH_KEY_B64" "${GIT_SSH_KEY_B64:-}"

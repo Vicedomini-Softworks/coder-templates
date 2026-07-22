@@ -157,23 +157,6 @@ data "coder_parameter" "git_repo_url" {
   mutable      = true
 }
 
-data "coder_parameter" "git_ssh_private_key" {
-  name         = "git_ssh_private_key"
-  display_name = "Git SSH deploy key"
-  description  = <<-EOT
-    Optional. SSH private key (full PEM, any key type), preinstalled
-    into ~/.ssh so `git clone` over SSH can authenticate against
-    private repos. Visible in plain text to this workspace's owner and
-    template admins - use a repo-scoped deploy key, not a personal key.
-    Leave blank to skip.
-  EOT
-  icon         = "/icon/git.svg"
-  type         = "string"
-  form_type    = "textarea"
-  default      = ""
-  mutable      = true
-}
-
 # ---------------------------------------------------------------------------
 # Coder agent
 # ---------------------------------------------------------------------------
@@ -354,7 +337,6 @@ resource "terraform_data" "env_vars" {
       STATE_DIR             = local.state_dir
       CODER_INIT_SCRIPT_B64 = base64encode(coder_agent.main.init_script)
       CODER_AGENT_TOKEN     = coder_agent.main.token
-      GIT_SSH_KEY_B64       = base64encode(data.coder_parameter.git_ssh_private_key.value)
     }
   }
 

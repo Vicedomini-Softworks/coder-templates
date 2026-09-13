@@ -148,6 +148,51 @@ RUN install -d -m 0755 /etc/apt/keyrings \
 RUN curl -fsSL "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" \
     | bash -s -- /usr/local/bin
 
+# --- Chromium OS dependencies (for Playwright, installed below as `coder`) ---
+# `playwright install --with-deps` would normally apt-get these itself, but
+# that means shelling out to `sudo apt-get` from a non-root RUN step, which
+# is flaky in a `docker buildx build` (no TTY, sudoers behavior varies by
+# base image). Installing them directly as root here sidesteps that
+# entirely. Exact package list for `ubuntu26.04-x64` (this base image's
+# Ubuntu release) taken from Playwright 1.63.0's own dependency registry:
+# https://github.com/microsoft/playwright/blob/v1.63.0/packages/playwright-core/src/server/registry/nativeDeps.ts
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        xvfb \
+        fonts-noto-color-emoji \
+        fonts-unifont \
+        libfontconfig1 \
+        libfreetype6 \
+        xfonts-cyrillic \
+        xfonts-scalable \
+        fonts-liberation \
+        fonts-ipafont-gothic \
+        fonts-wqy-zenhei \
+        fonts-tlwg-loma-otf \
+        fonts-freefont-ttf \
+        libasound2t64 \
+        libatk-bridge2.0-0t64 \
+        libatk1.0-0t64 \
+        libatspi2.0-0t64 \
+        libcairo2 \
+        libcups2t64 \
+        libdbus-1-3 \
+        libdrm2 \
+        libgbm1 \
+        libglib2.0-0t64 \
+        libnspr4 \
+        libnss3 \
+        libpango-1.0-0 \
+        libx11-6 \
+        libxcb1 \
+        libxcomposite1 \
+        libxdamage1 \
+        libxext6 \
+        libxfixes3 \
+        libxkbcommon0 \
+        libxrandr2 \
+    && rm -rf /var/lib/apt/lists/*
+
 # --- Oh My Zsh ---
 # Installed before the SDKMAN block below appends its own lines to
 # .zshrc, so Oh My Zsh's template is in place first and our tool-init
@@ -210,12 +255,10 @@ nvm alias default 22
 # Vitest browser suites (@vitest/browser-playwright), which exercise real
 # Shadow DOM/Custom Element behavior instead of jsdom. Run as `coder` (not
 # root) so the browser binary lands under $HOME/.cache/ms-playwright and
-# gets baked into /etc/skel below; `--with-deps` still works non-root
-# because Playwright shells out to `sudo apt-get` for the OS package half,
-# and `coder` has passwordless sudo (see the base image's
-# /etc/sudoers.d/nopasswd).
+# gets baked into /etc/skel below. No `--with-deps` here - the OS packages
+# it would install are already handled by the root-level apt block above.
 npm install -g playwright@1.63.0
-npx playwright install --with-deps chromium
+npx playwright install chromium
 
 # The installers above only reliably wire themselves into .bashrc: SDKMAN
 # only appends to .zshrc if it already exists at install time (it doesn't

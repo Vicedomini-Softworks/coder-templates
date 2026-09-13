@@ -271,6 +271,14 @@ curl -s "https://get.sdkman.io" | bash
 sed -i "s/sdkman_auto_answer=false/sdkman_auto_answer=true/" "$HOME/.sdkman/etc/config"
 source "$HOME/.sdkman/bin/sdkman-init.sh"
 
+# SDKMAN's own downloads occasionally land corrupted ("Stop! The archive
+# was corrupt and has been removed! Please try installing again.") - a
+# transient CDN/network hiccup, not a bad identifier - so give each
+# `sdk install` one retry before letting `set -e` fail the build.
+sdk_install_retry() {
+  "$@" < /dev/null || { echo "Retrying '$*' after a failed install..." >&2; "$@" < /dev/null; }
+}
+
 # Java identifiers are resolved to the latest Temurin patch for each major
 # at build time rather than hardcoded, since SDKMAN doesn't accept bare
 # "8-tem"/"11-tem" short forms for older majors. Matched straight off the
@@ -284,13 +292,13 @@ for major in 8 11 21; do
     echo "No Temurin build found for Java ${major} in 'sdk list java' output" >&2
     exit 1
   fi
-  sdk install java "$id" < /dev/null
+  sdk_install_retry sdk install java "$id"
 done
 id21=$(sdk list java 2>&1 | grep -oE "\b21\.[0-9][0-9.+]*-tem\b" | head -1)
 sdk default java "$id21"
 
-sdk install maven 3.9.9 < /dev/null
-sdk install jbang < /dev/null
+sdk_install_retry sdk install maven 3.9.9
+sdk_install_retry sdk install jbang
 
 # Camel JBang kit: the `camel` CLI (camel init/run/...), installed as a
 # JBang app. `jbang trust add` is required for non-interactive installs.

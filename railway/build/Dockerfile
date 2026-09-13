@@ -13,6 +13,7 @@ RUN apt-get update \
         ca-certificates \
         curl \
         gnupg \
+        openssl \
         unzip \
         zip \
         zsh \
@@ -158,6 +159,38 @@ RUN install -d -m 0755 /etc/apt/keyrings \
 
 RUN curl -fsSL "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" \
     | bash -s -- /usr/local/bin
+
+# --- AWS CLI v2 ---
+# Needed for vcloud-kustomize's TUTORIAL.md deploy workflow (ECR push, RDS,
+# Secrets Manager, Route53, ACM). No apt repo exists for it, so it's
+# installed via AWS's official installer, matching the CPU architecture
+# Docker reports for the build.
+RUN arch="$(dpkg --print-architecture)" \
+    && case "$arch" in \
+        amd64) awsarch=x86_64 ;; \
+        arm64) awsarch=aarch64 ;; \
+        *) echo "Unsupported architecture for AWS CLI: $arch" >&2; exit 1 ;; \
+       esac \
+    && curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-${awsarch}.zip" -o /tmp/awscliv2.zip \
+    && unzip -q /tmp/awscliv2.zip -d /tmp \
+    && /tmp/aws/install \
+    && rm -rf /tmp/awscliv2.zip /tmp/aws
+
+# --- Helm ---
+# Needed for vcloud-kustomize's TUTORIAL.md one-time cluster setup (ArgoCD,
+# the AWS Load Balancer Controller, and the External Secrets Operator are
+# all installed via Helm there). No apt repo, so it's installed via Helm's
+# official install script.
+RUN curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+# --- ArgoCD CLI ---
+# Used in vcloud-kustomize's TUTORIAL.md to confirm ArgoCD picked up a
+# change (`argocd app get ...`). No apt repo, so the binary is pulled
+# directly from GitHub releases, matching the CPU architecture Docker
+# reports for the build.
+RUN arch="$(dpkg --print-architecture)" \
+    && curl -fsSL -o /usr/local/bin/argocd "https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-${arch}" \
+    && chmod +x /usr/local/bin/argocd
 
 # --- Chromium OS dependencies (for Playwright, installed below as `coder`) ---
 # `playwright install --with-deps` would normally apt-get these itself, but

@@ -76,7 +76,7 @@ Persistent (survive stop/start): project, service, volume, project token. Epheme
 
 The default image is `ghcr.io/bpmct/railway-coder-workspace:latest`, which is `codercom/enterprise-base:ubuntu` plus a small entrypoint that fixes Railway volume ownership, decodes `CODER_INIT_SCRIPT_B64`, and runs the Coder agent as the `coder` user. The Dockerfile and entrypoint are vendored in this template under [`build/`](./build) so you can read, fork, or extend them without leaving the registry:
 
-- [`build/Dockerfile`](./build/Dockerfile) - 10 lines, thin layer on `codercom/enterprise-base:ubuntu`.
+- [`build/Dockerfile`](./build/Dockerfile) - layer on `codercom/enterprise-base:ubuntu` adding Claude Code/Cursor/Kiro CLIs, cloudflared/WARP/Tailscale, rootless Podman, PHP 8.5 + Composer, kubectl + kustomize, and SDKMAN (Java 8/11/21, Maven, JBang) + NVM (Node 22) + Playwright/Chromium.
 - [`build/entrypoint.sh`](./build/entrypoint.sh) - Railway volume `chown`, skeleton seed, `CODER_INIT_SCRIPT_B64` decode + drop to `coder`.
 
 **Adding your own tools:** the default image is deliberately minimal, so most teams will want to extend it. Two patterns:

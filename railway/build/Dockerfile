@@ -111,6 +111,43 @@ RUN apt-get update \
 RUN (grep -q "^coder:" /etc/subuid || echo "coder:100000:65536" >> /etc/subuid) \
     && (grep -q "^coder:" /etc/subgid || echo "coder:100000:65536" >> /etc/subgid)
 
+# --- PHP 8.5 + Composer ---
+# Toolchain for vicedomini-cloud's Laravel app (vcloud-auth), which targets
+# PHP 8.5 (see its CLAUDE.md and CI workflow). Ubuntu's own repos already
+# carry PHP 8.5 and Composer 2.x directly, so no extra PPA is needed here.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        php8.5-cli \
+        php8.5-common \
+        php8.5-curl \
+        php8.5-mbstring \
+        php8.5-xml \
+        php8.5-zip \
+        php8.5-bcmath \
+        php8.5-gd \
+        php8.5-intl \
+        php8.5-sqlite3 \
+        php8.5-redis \
+        composer \
+    && rm -rf /var/lib/apt/lists/*
+
+# --- kubectl + kustomize ---
+# Ahead of vcloud-kustomize's planned Kustomize/ArgoCD-driven Kubernetes
+# config (an empty scaffold today). kubectl isn't in Ubuntu's own repos, so
+# it's pulled from the official Kubernetes apt repo; kustomize has no apt
+# repo at all, so it's installed via its official install script instead.
+RUN install -d -m 0755 /etc/apt/keyrings \
+    && curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.34/deb/Release.key \
+        | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg \
+    && echo "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.34/deb/ /" \
+        > /etc/apt/sources.list.d/kubernetes.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends kubectl \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN curl -fsSL "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" \
+    | bash -s -- /usr/local/bin
+
 # --- Oh My Zsh ---
 # Installed before the SDKMAN block below appends its own lines to
 # .zshrc, so Oh My Zsh's template is in place first and our tool-init
@@ -169,6 +206,17 @@ export NVM_DIR="$HOME/.nvm"
 nvm install 22
 nvm alias default 22
 
+# Playwright + a headless Chromium build, for vcloud-library(-angular|-react)'s
+# Vitest browser suites (@vitest/browser-playwright), which exercise real
+# Shadow DOM/Custom Element behavior instead of jsdom. Run as `coder` (not
+# root) so the browser binary lands under $HOME/.cache/ms-playwright and
+# gets baked into /etc/skel below; `--with-deps` still works non-root
+# because Playwright shells out to `sudo apt-get` for the OS package half,
+# and `coder` has passwordless sudo (see the base image's
+# /etc/sudoers.d/nopasswd).
+npm install -g playwright@1.63.0
+npx playwright install --with-deps chromium
+
 # The installers above only reliably wire themselves into .bashrc: SDKMAN
 # only appends to .zshrc if it already exists at install time (it doesn't
 # yet, here), and NVM/JBang key off the currently running shell (bash, in
@@ -187,6 +235,8 @@ export PATH="$HOME/.jbang/bin:$PATH"
 export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
 [ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"
+
+export PATH="$HOME/.config/composer/vendor/bin:$PATH"
 ZSHRC_EOF
 EOF
 

@@ -240,12 +240,20 @@ source "$HOME/.sdkman/bin/sdkman-init.sh"
 
 # Java identifiers are resolved to the latest Temurin patch for each major
 # at build time rather than hardcoded, since SDKMAN doesn't accept bare
-# "8-tem"/"11-tem" short forms for older majors.
+# "8-tem"/"11-tem" short forms for older majors. Matched straight off the
+# "-tem"-suffixed identifier column (`sdk list java`'s layout has changed
+# vendor/version columns before - matching the stable identifier suffix is
+# less fragile than matching table structure), first hit wins since SDKMAN
+# lists each major's builds newest-first.
 for major in 8 11 21; do
-  id=$(sdk list java 2>&1 | grep -E "\| ${major}\.[0-9.]+ *\| tem " | head -1 | grep -oE "[0-9]+\.[0-9.]+-tem")
+  id=$(sdk list java 2>&1 | grep -oE "\b${major}\.[0-9][0-9.+]*-tem\b" | head -1)
+  if [ -z "$id" ]; then
+    echo "No Temurin build found for Java ${major} in 'sdk list java' output" >&2
+    exit 1
+  fi
   sdk install java "$id" < /dev/null
 done
-id21=$(sdk list java 2>&1 | grep -E "\| 21\.[0-9.]+ *\| tem " | head -1 | grep -oE "[0-9]+\.[0-9.]+-tem")
+id21=$(sdk list java 2>&1 | grep -oE "\b21\.[0-9][0-9.+]*-tem\b" | head -1)
 sdk default java "$id21"
 
 sdk install maven 3.9.9 < /dev/null

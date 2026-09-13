@@ -41,8 +41,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Coder CLI
-        run: curl -fsSL https://coder.com/install.sh | sh
+      - name: Install Coder CLI (matching the server version)
+        run: |
+          server_version=$(curl -fsSL "$CODER_URL/api/v2/buildinfo" | jq -r '.version' | sed -E 's/^v//; s/\+.*$//')
+          curl -fsSL https://coder.com/install.sh | sh -s -- --version "$server_version"
 
       - name: Push new template version
         working-directory: railway

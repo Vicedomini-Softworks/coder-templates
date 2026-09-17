@@ -237,6 +237,19 @@ RUN apt-get update \
         libxrandr2 \
     && rm -rf /var/lib/apt/lists/*
 
+# --- Shared NVM home (/opt/nvm) ---
+# Node must end up on PATH for EVERY shell - interactive zsh/bash logins,
+# but also non-interactive contexts like `coder ssh <ws> -- cmd`,
+# code-server tasks and agent-spawned scripts, which never read ~/.zshrc
+# or ~/.bashrc. A per-user NVM under $HOME (rc-file-activated) cannot do
+# that, and it also breaks for existing workspaces: entrypoint.sh
+# backfills /etc/skel with `cp -n`, so rc files written by older images
+# are never updated. Instead, NVM lives in /opt/nvm (owned by coder, so
+# `nvm install` works without sudo) and the default version's binaries
+# are symlinked into /usr/local/bin further below. The rc files then only
+# provide the `nvm` shell function; node/npm work without them.
+RUN install -d -o coder -g coder /opt/nvm
+
 # --- Oh My Zsh ---
 # Installed before the SDKMAN block below appends its own lines to
 # .zshrc, so Oh My Zsh's template is in place first and our tool-init
@@ -246,7 +259,7 @@ USER coder
 RUN sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended --keep-zshrc
 
 # --- SDKMAN! (Maven 3.9.9, Temurin JDK 8/11/21, JBang) + Camel JBang kit,
-#     and NVM (Node 22) ---
+#     and Node 22 via the shared NVM in /opt/nvm ---
 # Installed as the real `coder` user (not root with a faked $HOME): JBang
 # and Maven are JVM/Java-tooling and resolve their data/repo dirs from the
 # JVM's `user.home`, which is derived from the OS passwd entry rather than
@@ -257,7 +270,9 @@ RUN sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master
 # Everything then gets copied into /etc/skel so it survives the
 # volume-mount reseed in entrypoint.sh's `cp -rT /etc/skel /home/coder` on
 # a workspace's first boot, and /home/coder itself is reset to empty
-# afterward so the image doesn't ship the ~1GB of tooling twice.
+# afterward so the image doesn't ship the ~1GB of tooling twice. The
+# pi.dev agent and its preinstalled extensions (below) ride the same
+# skeleton copy via ~/.pi.
 #
 # coder's default shell is zsh (set above), so this block also wires
 # SDKMAN/JBang/NVM into .zshrc, not just the .bashrc the installers
@@ -305,8 +320,11 @@ sdk_install_retry sdk install jbang
 jbang trust add https://github.com/apache/camel/
 jbang app install camel@apache/camel
 
+# NVM installs into the shared /opt/nvm (created above, owned by coder).
+# NVM_DIR is exported before running the installer so both its rc-file
+# lines and `nvm install` target /opt/nvm instead of the default ~/.nvm.
+export NVM_DIR=/opt/nvm
 curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash
-export NVM_DIR="$HOME/.nvm"
 . "$NVM_DIR/nvm.sh"
 nvm install 22
 nvm alias default 22
@@ -335,7 +353,7 @@ export SDKMAN_DIR="$HOME/.sdkman"
 alias j!=jbang
 export PATH="$HOME/.jbang/bin:$PATH"
 
-export NVM_DIR="$HOME/.nvm"
+export NVM_DIR="/opt/nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
 [ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"
 
@@ -343,11 +361,103 @@ export PATH="$HOME/.config/composer/vendor/bin:$PATH"
 ZSHRC_EOF
 EOF
 
+# --- pi.dev coding agent (https://pi.dev) ---
+# Installed globally with the shared Node above; the `pi` binary lands in
+# the default Node version's bin dir and is symlinked into /usr/local/bin
+# further below, on PATH in every shell like the other agent CLIs. Auth
+# is per-user (`/login ...` inside pi) and persists on the home volume in
+# ~/.pi/agent/auth.json.
+USER coder
+RUN export NVM_DIR=/opt/nvm \
+    && . "$NVM_DIR/nvm.sh" \
+    && npm install -g --ignore-scripts @earendil-works/pi-coding-agent
+
+# --- pi extensions (https://github.com/narumiruna/pi-extensions) ---
+# `pi install` records each package in ~/.pi/agent/settings.json and
+# unpacks it under ~/.pi/agent/npm/, so installing here as `coder` puts
+# the extensions on the /etc/skel copy below and from there into every
+# new workspace's persistent home. Runs from /tmp (no project files, so
+# pi's project-trust flow never engages) and fully non-interactively.
+#
+# Every extension from the repo's packages/ directory is installed here
+# except: pi-tui-kit (a shared UI library other extensions depend on, not
+# an end-user extension itself), pi-starship (an alternate footer that
+# would conflict with pi-statusline, already installed below), and
+# pi-herdr/pi-langfuse/pi-sync/pi-chat/pi-firecrawl (each needs its own
+# external account/service configured before it does anything useful, so
+# it's opt-in via `pi install` rather than baked into the image).
+#
+# NOTE for workspaces created before this image: entrypoint.sh backfills
+# /etc/skel with `cp -n`, which never overwrites an existing
+# ~/.pi/agent/settings.json. If a workspace already has one, re-run the
+# same `pi install npm:@narumitw/<pkg>` commands there once by hand.
+RUN cd /tmp \
+    && export NVM_DIR=/opt/nvm PI_SKIP_VERSION_CHECK=1 PI_TELEMETRY=0 \
+    && . "$NVM_DIR/nvm.sh" \
+    && pi install npm:@narumitw/pi-plan-mode \
+    && pi install npm:@narumitw/pi-goal \
+    && pi install npm:@narumitw/pi-statusline \
+    && pi install npm:@narumitw/pi-btw \
+    && pi install npm:@narumitw/pi-stamp \
+    && pi install npm:@narumitw/pi-usage \
+    && pi install npm:@narumitw/pi-worktree \
+    && pi install npm:@narumitw/pi-file-context \
+    && pi install npm:@narumitw/pi-lsp \
+    && pi install npm:@narumitw/pi-github-pr \
+    && pi install npm:@narumitw/pi-accounts \
+    && pi install npm:@narumitw/pi-codex-compact \
+    && pi install npm:@narumitw/pi-subagents \
+    && pi install npm:@narumitw/pi-chrome-devtools \
+    && pi install npm:@narumitw/pi-caffeinate \
+    && pi install npm:@narumitw/pi-dotenv \
+    && pi install npm:@narumitw/pi-fleet \
+    && pi install npm:@narumitw/pi-tool \
+    && pi install npm:@narumitw/pi-cache-hit-monitor \
+    && pi install npm:@narumitw/pi-recall \
+    && npm cache clean --force
+
+# --- regolo.ai as a pi custom provider ---
+# OpenAI-Chat-Completions-compatible endpoint; the bundled model list was
+# taken from the public `GET https://api.regolo.ai/v1/models` (refresh it
+# with `curl -s https://api.regolo.ai/v1/models` and edit pi-models.json,
+# keeping only chat models - no whisper/ocr/embedding/reranker/image).
+# Auth: `/login regolo` inside pi (saved to ~/.pi/agent/auth.json on the
+# persistent home) or export REGOLO_API_KEY. The conservative `compat`
+# flags match typical vLLM-style OpenAI-compatible backends; refine them
+# after testing with a real key.
+COPY --chown=coder:coder pi-models.json /home/coder/.pi/agent/models.json
+
+# --- Seed the skeleton with everything per-user installed above ---
 USER root
 RUN cp -rT /home/coder /etc/skel \
     && rm -rf /home/coder \
     && mkdir -p /home/coder \
     && chown coder:coder /home/coder
+
+# --- node/npm/pi on PATH for every shell (the "node not loaded" fix) ---
+# /usr/local/bin is on PATH for login, non-login, interactive and
+# non-interactive shells alike, so symlinking the default Node version's
+# binaries there makes node/npm/npx (and the globally installed CLIs)
+# work in every context with no rc-file dependency - including on
+# workspaces whose home volume still carries rc files from older images.
+RUN NODE_BIN="$(echo /opt/nvm/versions/node/v22.*/bin)" \
+    && for f in node npm npx corepack playwright pi; do \
+         [ -e "$NODE_BIN/$f" ] && ln -sf "$NODE_BIN/$f" "/usr/local/bin/$f"; \
+       done \
+    && node --version \
+    && pi --version
+
+# The `nvm` shell function itself for login shells: /etc/profile.d covers
+# sh/bash login shells, /etc/zsh/zprofile covers zsh login shells
+# (coder's default shell). Non-login interactive shells get nvm from
+# ~/.bashrc / ~/.zshrc via the skeleton files.
+RUN printf '%s\n' \
+      'export NVM_DIR=/opt/nvm' \
+      '[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"' \
+      '[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"' \
+      > /etc/profile.d/nvm.sh \
+    && install -d -m 0755 /etc/zsh \
+    && cp /etc/profile.d/nvm.sh /etc/zsh/zprofile
 
 # Final upgrade pass: the first apt-get upgrade at the top of this file
 # only covers Ubuntu's own repos. By this point several more repos have

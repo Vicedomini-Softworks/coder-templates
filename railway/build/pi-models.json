@@ -1,0 +1,94 @@
+{
+  "providers": {
+    "regolo": {
+      "baseUrl": "https://api.regolo.ai/v1",
+      "api": "openai-completions",
+      "apiKey": "$REGOLO_API_KEY",
+      "compat": {
+        "supportsDeveloperRole": false,
+        "supportsReasoningEffort": false,
+        "maxTokensField": "max_tokens"
+      },
+      "models": [
+        {
+          "id": "gpt-oss-120b",
+          "name": "GPT-OSS 120B",
+          "reasoning": true,
+          "input": ["text"]
+        },
+        {
+          "id": "gpt-oss-20b",
+          "name": "GPT-OSS 20B",
+          "reasoning": true,
+          "input": ["text"]
+        },
+        {
+          "id": "glm5.2",
+          "name": "GLM 5.2",
+          "reasoning": true,
+          "input": ["text"]
+        },
+        {
+          "id": "qwen3-coder-next",
+          "name": "Qwen3 Coder Next",
+          "reasoning": false,
+          "input": ["text"]
+        },
+        {
+          "id": "qwen3.5-122b",
+          "name": "Qwen 3.5 122B",
+          "reasoning": true,
+          "input": ["text"]
+        },
+        {
+          "id": "qwen3.5-9b",
+          "name": "Qwen 3.5 9B",
+          "reasoning": true,
+          "input": ["text"]
+        },
+        {
+          "id": "qwen3.8-27b",
+          "name": "Qwen 3.8 27B",
+          "reasoning": true,
+          "input": ["text"]
+        },
+        {
+          "id": "Llama-3.3-70B-Instruct",
+          "name": "Llama 3.3 70B Instruct",
+          "reasoning": false,
+          "input": ["text"]
+        },
+        {
+          "id": "mistral-small-4-119b",
+          "name": "Mistral Small 4 119B",
+          "reasoning": false,
+          "input": ["text"]
+        },
+        {
+          "id": "gemma4-31b",
+          "name": "Gemma 4 31B",
+          "reasoning": false,
+          "input": ["text"]
+        },
+        {
+          "id": "apertus-70b",
+          "name": "Apertus 70B",
+          "reasoning": false,
+          "input": ["text"]
+        },
+        {
+          "id": "brick-v1-beta",
+          "name": "Brick v1 Beta",
+          "reasoning": false,
+          "input": ["text"]
+        },
+        {
+          "id": "brick-complexity-pro",
+          "name": "Brick Complexity Pro",
+          "reasoning": false,
+          "input": ["text"]
+        }
+      ]
+    }
+  }
+}

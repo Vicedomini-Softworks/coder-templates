@@ -76,8 +76,47 @@ Persistent (survive stop/start): project, service, volume, project token. Epheme
 
 The default image is `ghcr.io/bpmct/railway-coder-workspace:latest`, which is `codercom/enterprise-base:ubuntu` plus a small entrypoint that fixes Railway volume ownership, decodes `CODER_INIT_SCRIPT_B64`, and runs the Coder agent as the `coder` user. The Dockerfile and entrypoint are vendored in this template under [`build/`](./build) so you can read, fork, or extend them without leaving the registry:
 
-- [`build/Dockerfile`](./build/Dockerfile) - layer on `codercom/enterprise-base:ubuntu` adding Claude Code/Cursor/Kiro CLIs, GitHub CLI (`gh`), cloudflared/WARP/Tailscale, rootless Podman, PHP 8.5 + Composer, kubectl + kustomize, and SDKMAN (Java 8/11/21, Maven, JBang) + NVM (Node 22) + Playwright/Chromium.
+- [`build/Dockerfile`](./build/Dockerfile) - layer on `codercom/enterprise-base:ubuntu` adding the Claude Code, Cursor, Kiro and [pi.dev](https://pi.dev) coding-agent CLIs, GitHub CLI (`gh`), cloudflared/WARP/Tailscale, rootless Podman, PHP 8.5 + Composer, kubectl + kustomize, SDKMAN (Java 8/11/21, Maven, JBang), Node.js 22 and Playwright/Chromium.
 - [`build/entrypoint.sh`](./build/entrypoint.sh) - Railway volume `chown`, skeleton seed, `CODER_INIT_SCRIPT_B64` decode + drop to `coder`.
+- [`build/pi-models.json`](./build/pi-models.json) - regolo.ai custom provider for pi (see below).
+
+Node.js 22 is installed **system-wide** via a shared NVM in `/opt/nvm`, with `node`/`npm`/`npx` symlinked into `/usr/local/bin`. That puts Node on PATH for every shell - including non-interactive ones (`coder ssh <ws> -- cmd`, code-server tasks, agent scripts) and workspaces whose home volume still carries rc files from older images, since entrypoint backfills never overwrite existing rc files. The `nvm` shell function is still available in login/interactive shells for switching versions; versions installed at runtime live in `/opt` and reset to the image's default on the next start.
+
+### pi.dev coding agent
+
+The image preinstalls [pi](https://pi.dev) (`pi` on PATH everywhere) with almost every extension from [narumiruna/pi-extensions](https://github.com/narumiruna/pi-extensions):
+
+| Extension | What it adds |
+| --- | --- |
+| `pi-plan-mode` | Read-only `/plan` collaboration before implementation |
+| `pi-goal` | Keep the agent working until a goal is verified complete |
+| `pi-statusline` | Footer with model, git state, tokens, cost, context usage |
+| `pi-btw` | Quick `/btw` side questions outside the main context |
+| `pi-stamp` | Timestamps and response/tool timing in the transcript |
+| `pi-usage` | `/usage` for Codex/OpenRouter subscription limits |
+| `pi-worktree` | Git worktrees that carry the pi session along |
+| `pi-file-context` | Attach exact file lines / diff hunks to the next prompt |
+| `pi-lsp` | Language-server diagnostics and code actions |
+| `pi-github-pr` | Current-branch PR checks/reviews via the `gh` CLI |
+| `pi-accounts` | Switch between named OAuth accounts with `/accounts` |
+| `pi-codex-compact` | Bounded, replayable context compaction |
+| `pi-subagents` | Bounded background pi jobs with main-agent messaging |
+| `pi-chrome-devtools` | Inspect tabs, evaluate JS, capture screenshots via CDP |
+| `pi-caffeinate` | Prevent the system from sleeping during long prompts |
+| `pi-dotenv` | Load explicit dotenv files for credential discovery |
+| `pi-fleet` | Separate pi processes in terminal splits for bounded messages |
+| `pi-tool` | Browse configured tools and inspect their active state/schemas |
+| `pi-cache-hit-monitor` | Live prompt-cache reuse and cost diagnostics |
+| `pi-recall` | Save and recall selected messages locally across sessions |
+
+Not installed: `pi-herdr`, `pi-langfuse`, `pi-sync` and `pi-firecrawl` each need their own external account/service configured before they're useful, so they're left as opt-in (`pi install npm:@narumitw/<pkg>`) rather than baked into the image; `pi-chat` (peer chat rooms) is out of scope for a single-user workspace; `pi-starship` is an alternate footer that would conflict with `pi-statusline` above; `pi-tui-kit` is a shared library other extensions depend on, not an end-user extension.
+
+Manage them with `pi list` / `pi install` / `pi remove`; change the preinstalled set by editing the `pi install` block in [`build/Dockerfile`](./build/Dockerfile). Authenticate pi per workspace with `/login` (credentials persist on the home volume in `~/.pi/agent/auth.json`).
+
+[regolo.ai](https://regolo.ai) is registered as a pi custom provider (OpenAI-compatible, `https://api.regolo.ai/v1`) via `~/.pi/agent/models.json` ([source](./build/pi-models.json)). Authenticate once with `/login regolo` inside pi, or export `REGOLO_API_KEY`; then pick a model with `/model` (e.g. `gpt-oss-120b`, `glm5.2`, `qwen3-coder-next`). The bundled model list comes from the public `curl -s https://api.regolo.ai/v1/models` - refresh `build/pi-models.json` when regolo adds models.
+
+> [!NOTE]
+> Workspaces created before this image keep their existing home volume: `node`/`npm`/`pi` appear anyway (they live in the image under `/usr/local/bin`), but a pre-existing `~/.pi/agent/settings.json` or `models.json` is not overwritten by the skeleton backfill. Run the `pi install npm:@narumitw/...` commands from [`build/Dockerfile`](./build/Dockerfile) once by hand to pick up the preinstalled extensions.
 
 **Adding your own tools:** the default image is deliberately minimal, so most teams will want to extend it. Two patterns:
 

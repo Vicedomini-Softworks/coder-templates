@@ -76,11 +76,13 @@ Persistent (survive stop/start): project, service, volume, project token. Epheme
 
 The default image is `ghcr.io/bpmct/railway-coder-workspace:latest`, which is `codercom/enterprise-base:ubuntu` plus a small entrypoint that fixes Railway volume ownership, decodes `CODER_INIT_SCRIPT_B64`, and runs the Coder agent as the `coder` user. The Dockerfile and entrypoint are vendored in this template under [`build/`](./build) so you can read, fork, or extend them without leaving the registry:
 
-- [`build/Dockerfile`](./build/Dockerfile) - layer on `codercom/enterprise-base:ubuntu` adding the Claude Code, Cursor, Kiro and [pi.dev](https://pi.dev) coding-agent CLIs, GitHub CLI (`gh`), cloudflared/WARP/Tailscale, rootless Podman, PHP 8.5 + Composer, kubectl + kustomize, SDKMAN (Java 8/11/21, Maven, JBang), Node.js 22 and Playwright/Chromium.
+- [`build/Dockerfile`](./build/Dockerfile) - layer on `codercom/enterprise-base:ubuntu` adding the Claude Code, Cursor, Kiro and [pi.dev](https://pi.dev) coding-agent CLIs, GitHub CLI (`gh`), cloudflared/WARP/Tailscale, rootless Podman, PHP 8.5 + Composer, kubectl + kustomize, SDKMAN (Java 8/11/21, Maven, JBang), Node.js 22, Playwright/Chromium and `tini` as PID 1 (process reaper).
 - [`build/entrypoint.sh`](./build/entrypoint.sh) - Railway volume `chown`, skeleton seed, `CODER_INIT_SCRIPT_B64` decode + drop to `coder`.
 - [`build/pi-models.json`](./build/pi-models.json) - regolo.ai custom provider for pi (see below).
 
 Node.js 22 is installed **system-wide** via a shared NVM in `/opt/nvm`, with `node`/`npm`/`npx` symlinked into `/usr/local/bin`. That puts Node on PATH for every shell - including non-interactive ones (`coder ssh <ws> -- cmd`, code-server tasks, agent scripts) and workspaces whose home volume still carries rc files from older images, since entrypoint backfills never overwrite existing rc files. The `nvm` shell function is still available in login/interactive shells for switching versions; versions installed at runtime live in `/opt` and reset to the image's default on the next start.
+
+The image's `ENTRYPOINT` runs under [tini](https://github.com/krallin/tini) rather than executing `entrypoint.sh` directly as PID 1. Without a real init process, `entrypoint.sh`'s final `exec su ... coder` replaces PID 1's process image with `su`, which never reaps orphaned child processes (e.g. every `git`/`gh` subprocess a coding agent spawns and abandons) - they pile up as zombies until Railway's per-container process-count limit (`pids.max`) is hit and the workspace has to be restarted. tini runs as the actual container PID 1, wraps `entrypoint.sh`, and reaps all orphaned descendants regardless of what `entrypoint.sh` execs into. This only takes effect on container start, so a workspace already running on an older image needs to be stopped/restarted (or otherwise redeployed) after pushing this fix to actually pick it up.
 
 ### pi.dev coding agent
 
@@ -130,7 +132,7 @@ Manage them with `pi list` / `pi install` / `pi remove`; change the preinstalled
     && rm -rf /var/lib/apt/lists/*
    ```
 
-2. **Duplicate `build/` and build from a different base**, if you need to swap the base image entirely (e.g. `codercom/example-universal:ubuntu`, an internal golden image, or a non-Ubuntu distro). Copy [`build/entrypoint.sh`](./build/entrypoint.sh) verbatim - the image contract that the template relies on (volume chown, `CODER_INIT_SCRIPT_B64` decode, drop to `coder` user) lives in that entrypoint, not in the base image.
+2. **Duplicate `build/` and build from a different base**, if you need to swap the base image entirely (e.g. `codercom/example-universal:ubuntu`, an internal golden image, or a non-Ubuntu distro). Copy [`build/entrypoint.sh`](./build/entrypoint.sh) verbatim - the image contract that the template relies on (volume chown, `CODER_INIT_SCRIPT_B64` decode, drop to `coder` user) lives in that entrypoint, not in the base image. Also keep `tini` installed and wrapping the entrypoint in your `ENTRYPOINT` line (`["/usr/local/bin/tini", "--", "/coder-entrypoint.sh"]`, not `["/coder-entrypoint.sh"]` directly) - dropping it reintroduces the zombie-process/`pids.max` exhaustion bug described above.
 
 Build, push to any registry, and point the template at it:
 

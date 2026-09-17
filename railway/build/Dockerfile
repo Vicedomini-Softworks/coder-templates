@@ -192,6 +192,23 @@ RUN arch="$(dpkg --print-architecture)" \
     && curl -fsSL -o /usr/local/bin/argocd "https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-${arch}" \
     && chmod +x /usr/local/bin/argocd
 
+# --- tini (minimal init/PID-1 reaper) ---
+# entrypoint.sh's final step execs `su -s /bin/bash coder ...`, which
+# replaces this container's PID 1 process image and never reaps
+# orphaned/reparented children (observed live: hundreds of zombie git/gh/
+# sleep processes accumulating under PPID 1 until the cgroup's pids.max
+# cap is hit and every new fork() fails). tini becomes the real container
+# PID 1 instead (see ENTRYPOINT below), registers as a child subreaper via
+# prctl(PR_SET_CHILD_SUBREAPER), and wait()s every orphaned descendant
+# regardless of how deep the exec chain under it goes. No apt repo for
+# tini, so it's pulled from GitHub releases like argocd/kustomize above,
+# matching the CPU architecture Docker reports for the build. The static
+# build avoids any glibc dependency for this one binary.
+RUN arch="$(dpkg --print-architecture)" \
+    && curl -fsSL -o /usr/local/bin/tini "https://github.com/krallin/tini/releases/latest/download/tini-static-${arch}" \
+    && chmod +x /usr/local/bin/tini \
+    && /usr/local/bin/tini --version
+
 # --- Chromium OS dependencies (for Playwright, installed below as `coder`) ---
 # `playwright install --with-deps` would normally apt-get these itself, but
 # that means shelling out to `sudo apt-get` from a non-root RUN step, which
@@ -470,4 +487,4 @@ RUN apt-get update \
 COPY entrypoint.sh /coder-entrypoint.sh
 RUN chmod +x /coder-entrypoint.sh
 
-ENTRYPOINT ["/coder-entrypoint.sh"]
+ENTRYPOINT ["/usr/local/bin/tini", "--", "/coder-entrypoint.sh"]

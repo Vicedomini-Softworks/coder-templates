@@ -157,8 +157,18 @@ RUN install -d -m 0755 /etc/apt/keyrings \
     && apt-get install -y --no-install-recommends kubectl \
     && rm -rf /var/lib/apt/lists/*
 
-RUN curl -fsSL "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" \
-    | bash -s -- /usr/local/bin
+# install_kustomize.sh itself calls the GitHub API to resolve the latest
+# release, which is capped at 60 unauthenticated requests/hour per IP -
+# easily exhausted by GitHub Actions' shared runner IP pool ("Github
+# rate-limiter failed the request"). The script honors GITHUB_TOKEN to
+# raise that to 5000/hour; CI passes its default token in as a BuildKit
+# secret (see build-workspace-image.yml) so it's never baked into a layer.
+# `required=false` keeps this working for a local `docker build` with no
+# secret supplied, at the unauthenticated rate limit.
+RUN --mount=type=secret,id=github_token,required=false \
+    export GITHUB_TOKEN="$(cat /run/secrets/github_token 2> /dev/null || true)" \
+    && curl -fsSL "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" \
+        | bash -s -- /usr/local/bin
 
 # --- AWS CLI v2 ---
 # Needed for vcloud-kustomize's TUTORIAL.md deploy workflow (ECR push, RDS,

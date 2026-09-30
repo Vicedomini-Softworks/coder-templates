@@ -13,6 +13,8 @@ RUN apt-get update \
         ca-certificates \
         curl \
         gnupg \
+        lynx \
+        nano \
         openssl \
         unzip \
         zip \
@@ -441,6 +443,7 @@ RUN cd /tmp \
     && pi install npm:@narumitw/pi-tool \
     && pi install npm:@narumitw/pi-cache-hit-monitor \
     && pi install npm:@narumitw/pi-recall \
+    && pi install npm:pi-impeccable \
     && npm cache clean --force
 
 # --- regolo.ai as a pi custom provider ---

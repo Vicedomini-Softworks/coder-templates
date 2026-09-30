@@ -18,6 +18,19 @@ if [ "$(id -u)" = "0" ]; then
   command -v warp-svc > /dev/null 2>&1 && warp-svc > /tmp/warp-svc.log 2>&1 &
 fi
 
+# Best-effort OS patching on every start: update + upgrade, then purge the
+# apt cache/lists to keep the layer small. Runs in the background so it never
+# delays the agent coming up; output goes to /tmp/apt-upgrade.log. Needs root.
+if [ "$(id -u)" = "0" ]; then
+  (
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update \
+      && apt-get upgrade -y \
+      ; apt-get clean \
+      ; rm -rf /var/lib/apt/lists/*
+  ) > /tmp/apt-upgrade.log 2>&1 &
+fi
+
 # Seed home directory with skeleton files on first start.
 if [ ! -f /home/coder/.init_done ]; then
   cp -rT /etc/skel /home/coder 2> /dev/null || true

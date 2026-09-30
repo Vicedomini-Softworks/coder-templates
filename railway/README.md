@@ -52,6 +52,14 @@ coder templates push railway --directory . \
   --variable enable_project_management=true
 ```
 
+To authenticate Claude Code in every workspace, generate a token with `claude setup-token` and pass it as well (it is exported as `$CLAUDE_CODE_OAUTH_TOKEN`; shared by all workspaces of the template):
+
+```sh
+coder templates push railway --directory . \
+  --variable railway_token=YOUR_RAILWAY_TOKEN \
+  --variable claude_code_oauth_token=sk-ant-oat01-...
+```
+
 ## Usage
 
 Create a workspace from the `railway` template. The only end-user parameter is:

@@ -101,6 +101,19 @@ variable "image_registry_password" {
   EOT
 }
 
+variable "claude_code_oauth_token" {
+  type        = string
+  default     = ""
+  sensitive   = true
+  description = <<-EOT
+    Optional Claude Code OAuth token (generate with `claude setup-token`).
+    When set, it is exported as CLAUDE_CODE_OAUTH_TOKEN in every workspace
+    session so `claude` is authenticated without an interactive login.
+    Shared by all workspaces created from this template. Leave empty to
+    skip.
+  EOT
+}
+
 provider "coder" {}
 
 locals {
@@ -173,12 +186,15 @@ resource "coder_agent" "main" {
     fi
   EOT
 
-  env = {
-    GIT_AUTHOR_NAME     = coalesce(data.coder_workspace_owner.me.full_name, data.coder_workspace_owner.me.name)
-    GIT_AUTHOR_EMAIL    = data.coder_workspace_owner.me.email
-    GIT_COMMITTER_NAME  = coalesce(data.coder_workspace_owner.me.full_name, data.coder_workspace_owner.me.name)
-    GIT_COMMITTER_EMAIL = data.coder_workspace_owner.me.email
-  }
+  env = merge(
+    {
+      GIT_AUTHOR_NAME     = coalesce(data.coder_workspace_owner.me.full_name, data.coder_workspace_owner.me.name)
+      GIT_AUTHOR_EMAIL    = data.coder_workspace_owner.me.email
+      GIT_COMMITTER_NAME  = coalesce(data.coder_workspace_owner.me.full_name, data.coder_workspace_owner.me.name)
+      GIT_COMMITTER_EMAIL = data.coder_workspace_owner.me.email
+    },
+    var.claude_code_oauth_token != "" ? { CLAUDE_CODE_OAUTH_TOKEN = var.claude_code_oauth_token } : {},
+  )
 
   metadata {
     display_name = "CPU Usage"

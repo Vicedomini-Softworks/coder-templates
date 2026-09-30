@@ -50,7 +50,7 @@ jobs:
       # runners' IPs specifically, so a dynamic lookup isn't reliable here.
       # Bump this when the server is upgraded.
       - name: Install Coder CLI (matching the server version)
-        run: curl -fsSL https://coder.com/install.sh | sh -s -- --version 2.35.2
+        run: curl -fsSL https://coder.com/install.sh | sh -s -- --version 2.37.3
 
       - name: Push new template version
         working-directory: railway

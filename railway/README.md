@@ -60,6 +60,14 @@ coder templates push railway --directory . \
   --variable claude_code_oauth_token=sk-ant-oat01-...
 ```
 
+To join every workspace to your tailnet, pass a Tailscale auth key (exported as `$TS_AUTHKEY`; on start the workspace runs `tailscale up --auth-key=... --hostname=<project name>`). If the variable is empty, Tailscale is not started:
+
+```sh
+coder templates push railway --directory . \
+  --variable railway_token=YOUR_RAILWAY_TOKEN \
+  --variable tailscale_auth_key=tskey-auth-...
+```
+
 ## Usage
 
 Create a workspace from the `railway` template. The only end-user parameter is:

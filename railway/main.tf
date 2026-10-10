@@ -114,6 +114,18 @@ variable "claude_code_oauth_token" {
   EOT
 }
 
+variable "tailscale_auth_key" {
+  type        = string
+  default     = ""
+  sensitive   = true
+  description = <<-EOT
+    Optional Tailscale auth key (https://login.tailscale.com/admin/settings/keys).
+    When set, each workspace runs `tailscale up --auth-key=...` on start and
+    joins your tailnet as `coder-<owner>-<workspace>`. When empty, Tailscale
+    is not started. Shared by all workspaces created from this template.
+  EOT
+}
+
 provider "coder" {}
 
 locals {
@@ -194,6 +206,7 @@ resource "coder_agent" "main" {
       GIT_COMMITTER_EMAIL = data.coder_workspace_owner.me.email
     },
     var.claude_code_oauth_token != "" ? { CLAUDE_CODE_OAUTH_TOKEN = var.claude_code_oauth_token } : {},
+    var.tailscale_auth_key != "" ? { TS_AUTHKEY = var.tailscale_auth_key } : {},
   )
 
   metadata {
@@ -566,5 +579,48 @@ resource "coder_script" "railway_cli" {
     echo "  railway status"
     echo "  railway logs --service workspace"
     echo "  railway variables"
+  EOT
+}
+
+# Optional: join the workspace to a tailnet on start. Only created when
+# var.tailscale_auth_key is set; without a key Tailscale is not started.
+# The key reaches the script through the agent env (TS_AUTHKEY), not the
+# script body. The tailscale package itself is baked into the image
+# (build/Dockerfile); the install fallback below only covers custom images.
+resource "coder_script" "tailscale" {
+  count              = var.tailscale_auth_key != "" ? 1 : 0
+  agent_id           = coder_agent.main.id
+  display_name       = "Tailscale"
+  icon               = "/icon/tailscale.svg"
+  run_on_start       = true
+  start_blocks_login = false
+
+  script = <<-EOT
+    set -eu
+
+    if ! command -v tailscale > /dev/null 2>&1; then
+      echo "Installing Tailscale..."
+      curl -fsSL https://tailscale.com/install.sh | sh
+    fi
+
+    # The image entrypoint starts tailscaled as root (needs /dev/net/tun).
+    # If it isn't up, start it ourselves, falling back to userspace
+    # networking when the container has no TUN device.
+    if ! sudo tailscale status > /dev/null 2>&1 && ! pgrep -x tailscaled > /dev/null; then
+      if [ -c /dev/net/tun ]; then
+        sudo nohup tailscaled > /tmp/tailscaled.log 2>&1 &
+      else
+        echo "No /dev/net/tun; starting tailscaled in userspace-networking mode."
+        sudo nohup tailscaled --tun=userspace-networking > /tmp/tailscaled.log 2>&1 &
+      fi
+    fi
+
+    for _ in $(seq 1 30); do
+      [ -S /var/run/tailscale/tailscaled.sock ] && break
+      sleep 1
+    done
+
+    sudo tailscale up --auth-key="$TS_AUTHKEY" --hostname="${local.project_name}"
+    echo "Tailscale up: $(tailscale ip -4 2>/dev/null | head -n1)"
   EOT
 }

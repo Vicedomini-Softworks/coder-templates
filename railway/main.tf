@@ -555,7 +555,9 @@ resource "coder_script" "railway_cli" {
     # binary after.
     if ! [ -x "$HOME/.railway/bin/railway" ]; then
       echo "Installing Railway CLI..."
-      curl -fsSL https://railway.app/install.sh -o /tmp/railway-install.sh
+      # agents.railway.com installs the CLI and also configures the
+      # Railway MCP server / agent support for installed coding agents.
+      curl -fsSL https://agents.railway.com -o /tmp/railway-install.sh
       bash /tmp/railway-install.sh || true
       rm -f /tmp/railway-install.sh
     fi
@@ -608,10 +610,10 @@ resource "coder_script" "tailscale" {
     # networking when the container has no TUN device.
     if ! sudo tailscale status > /dev/null 2>&1 && ! pgrep -x tailscaled > /dev/null; then
       if [ -c /dev/net/tun ]; then
-        sudo nohup tailscaled > /tmp/tailscaled.log 2>&1 &
+        sudo sh -c 'nohup tailscaled > /tmp/tailscaled.log 2>&1 &'
       else
         echo "No /dev/net/tun; starting tailscaled in userspace-networking mode."
-        sudo nohup tailscaled --tun=userspace-networking > /tmp/tailscaled.log 2>&1 &
+        sudo sh -c 'nohup tailscaled --tun=userspace-networking > /tmp/tailscaled.log 2>&1 &'
       fi
     fi
 

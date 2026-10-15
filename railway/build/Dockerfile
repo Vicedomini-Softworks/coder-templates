@@ -172,6 +172,18 @@ RUN --mount=type=secret,id=github_token,required=false \
     && curl -fsSL "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" \
         | bash -s -- /usr/local/bin
 
+# --- Terraform ---
+# Installed from HashiCorp's official apt repo.
+RUN install -d -m 0755 /etc/apt/keyrings \
+    && curl -fsSL https://apt.releases.hashicorp.com/gpg \
+        | gpg --dearmor -o /etc/apt/keyrings/hashicorp.gpg \
+    && . /etc/os-release \
+    && echo "deb [signed-by=/etc/apt/keyrings/hashicorp.gpg] https://apt.releases.hashicorp.com ${VERSION_CODENAME} main" \
+        > /etc/apt/sources.list.d/hashicorp.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends terraform \
+    && rm -rf /var/lib/apt/lists/*
+
 # --- AWS CLI v2 ---
 # Needed for vcloud-kustomize's TUTORIAL.md deploy workflow (ECR push, RDS,
 # Secrets Manager, Route53, ACM). No apt repo exists for it, so it's

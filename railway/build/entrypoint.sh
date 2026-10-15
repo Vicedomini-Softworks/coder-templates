@@ -14,7 +14,13 @@ fi
 # which the container runtime may not grant - failures here are logged
 # but must never block the workspace from starting.
 if [ "$(id -u)" = "0" ]; then
-  command -v tailscaled > /dev/null 2>&1 && tailscaled > /tmp/tailscaled.log 2>&1 &
+  if command -v tailscaled > /dev/null 2>&1; then
+    # Without /dev/net/tun (typical on Railway) fall back to userspace mode.
+    TS_FLAGS=""
+    [ -c /dev/net/tun ] || TS_FLAGS="--tun=userspace-networking"
+    tailscaled $TS_FLAGS > /tmp/tailscaled.log 2>&1 &
+    chmod 666 /tmp/tailscaled.log 2> /dev/null || true
+  fi
   command -v warp-svc > /dev/null 2>&1 && warp-svc > /tmp/warp-svc.log 2>&1 &
 fi
 

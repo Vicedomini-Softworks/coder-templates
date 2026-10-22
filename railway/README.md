@@ -68,6 +68,16 @@ coder templates push railway --directory . \
   --variable tailscale_auth_key=tskey-auth-...
 ```
 
+## Tailscale
+
+When `tailscale_auth_key` is set, `tailscaled` runs with a local SOCKS5 and HTTP proxy on `localhost:1055` (`--socks5-server` / `--outbound-http-proxy-listen`, both on the same port). In userspace-networking mode (Railway exposes no `/dev/net/tun`) nothing in the workspace can reach the tailnet directly: `.corp` names don't resolve and the `10.0.0.0/16` subnets aren't routed, so go through the proxy. The proxy is **opt-in per command**: `ALL_PROXY`/`HTTPS_PROXY`/`HTTP_PROXY` are deliberately not set, so GitHub, npm, Composer, apt and the Coder agent keep going out directly.
+
+```sh
+curl --proxy socks5h://localhost:1055 https://jenkins.dev-k8s.vicedomini.corp/login
+```
+
+Use `socks5h://` (not `socks5://`): with the `h` the hostname is resolved by `tailscaled` on the tailnet (MagicDNS / split DNS), which is the only way `.corp` names resolve. Tools without SOCKS support can use the HTTP proxy on the same port, e.g. `HTTPS_PROXY=http://localhost:1055 some-tool ...` for a single command. `tailscale nc <host> <port>` also works for raw TCP.
+
 ## Usage
 
 Create a workspace from the `railway` template. The only end-user parameter is:

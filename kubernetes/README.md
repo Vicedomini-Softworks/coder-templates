@@ -50,6 +50,16 @@ Optional, same as the Railway template:
 
 The kubeconfig is a sensitive template variable and is never exposed to workspace users.
 
+## Tailscale
+
+When `tailscale_auth_key` is set, `tailscaled` runs with a local SOCKS5 and HTTP proxy on `localhost:1055` (`--socks5-server` / `--outbound-http-proxy-listen`, both on the same port). If the node exposes `/dev/net/tun` tailscaled uses kernel networking and the tailnet is routed normally; without it, it falls back to userspace networking, where nothing in the workspace can reach the tailnet directly (`.corp` names don't resolve, the `10.0.0.0/16` subnets aren't routed) and the proxy is the way in. The proxy works in both modes. The proxy is **opt-in per command**: `ALL_PROXY`/`HTTPS_PROXY`/`HTTP_PROXY` are deliberately not set, so GitHub, npm, Composer, apt and the Coder agent keep going out directly.
+
+```sh
+curl --proxy socks5h://localhost:1055 https://jenkins.dev-k8s.vicedomini.corp/login
+```
+
+Use `socks5h://` (not `socks5://`): with the `h` the hostname is resolved by `tailscaled` on the tailnet (MagicDNS / split DNS), which is the only way `.corp` names resolve. Tools without SOCKS support can use the HTTP proxy on the same port, e.g. `HTTPS_PROXY=http://localhost:1055 some-tool ...` for a single command. `tailscale nc <host> <port>` also works for raw TCP.
+
 ## Architecture
 
 For each workspace, in `var.namespace`, named `coder-<owner>-<workspace>`:

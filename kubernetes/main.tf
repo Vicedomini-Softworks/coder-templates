@@ -444,13 +444,15 @@ resource "coder_script" "tailscale" {
 
     # The image entrypoint starts tailscaled as root (needs /dev/net/tun).
     # If it isn't up, start it ourselves, falling back to userspace
-    # networking when the container has no TUN device.
+    # networking when the container has no TUN device. Same flags as the
+    # entrypoint: SOCKS5 + HTTP proxy on localhost:1055, used per command.
+    TS_PROXY_FLAGS="--socks5-server=localhost:1055 --outbound-http-proxy-listen=localhost:1055"
     if ! sudo tailscale status > /dev/null 2>&1 && ! pgrep -x tailscaled > /dev/null; then
       if [ -c /dev/net/tun ]; then
-        sudo nohup tailscaled > /tmp/tailscaled.log 2>&1 &
+        sudo nohup tailscaled $TS_PROXY_FLAGS > /tmp/tailscaled.log 2>&1 &
       else
         echo "No /dev/net/tun; starting tailscaled in userspace-networking mode."
-        sudo nohup tailscaled --tun=userspace-networking > /tmp/tailscaled.log 2>&1 &
+        sudo nohup tailscaled $TS_PROXY_FLAGS --tun=userspace-networking > /tmp/tailscaled.log 2>&1 &
       fi
     fi
 

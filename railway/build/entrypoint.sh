@@ -16,8 +16,11 @@ fi
 if [ "$(id -u)" = "0" ]; then
   if command -v tailscaled > /dev/null 2>&1; then
     # Without /dev/net/tun (typical on Railway) fall back to userspace mode.
-    TS_FLAGS=""
-    [ -c /dev/net/tun ] || TS_FLAGS="--tun=userspace-networking"
+    # SOCKS5 + HTTP proxy on localhost:1055 (one port, both protocols) so
+    # programs can reach the tailnet in userspace mode, opt-in per command
+    # (`curl --proxy socks5h://localhost:1055 ...`); no global *_PROXY env.
+    TS_FLAGS="--socks5-server=localhost:1055 --outbound-http-proxy-listen=localhost:1055"
+    [ -c /dev/net/tun ] || TS_FLAGS="$TS_FLAGS --tun=userspace-networking"
     tailscaled $TS_FLAGS > /tmp/tailscaled.log 2>&1 &
     chmod 666 /tmp/tailscaled.log 2> /dev/null || true
   fi

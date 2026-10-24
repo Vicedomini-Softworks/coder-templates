@@ -16,7 +16,7 @@ Same workspace as the [`railway`](../railway) template, running on a Kubernetes 
 | Persistent | project, service, volume | PVC (`/home/coder`), optional pull secret |
 | Ephemeral (per start) | env vars, image deploy | Deployment |
 | Parameters | `region`, `git_repo_url` | `git_repo_url` |
-| Variables | `railway_token`, `enable_project_management`, `workspace_image`, `image_registry_*`, `claude_code_oauth_token`, `tailscale_*`, `internal_ca_cert`, `jenkins_*` | `kubeconfig`, `namespace`, `storage_class`, `home_disk_size`, `cpu_limit`, `memory_limit`, `workspace_image`, `image_registry_*`, `claude_code_oauth_token`, `tailscale_*`, `internal_ca_cert`, `jenkins_*` |
+| Variables | `railway_token`, `enable_project_management`, `workspace_image`, `image_registry_*`, `claude_code_oauth_token`, `tailscale_*`, `internal_ca_*`, `jenkins_*` | `kubeconfig`, `namespace`, `storage_class`, `home_disk_size`, `cpu_limit`, `memory_limit`, `workspace_image`, `image_registry_*`, `claude_code_oauth_token`, `tailscale_*`, `internal_ca_*`, `jenkins_*` |
 | Apps | code-server, git-clone | code-server, git-clone |
 
 Not carried over: `railway_token`, `region` and `enable_project_management` have no Kubernetes equivalent.
@@ -45,7 +45,6 @@ Optional, same as the Railway template:
 ```sh
   --variable claude_code_oauth_token=sk-ant-oat01-... \
   --variable tailscale_auth_key=tskey-auth-... \
-  --variable internal_ca_cert="$(cat dev-k8s-ca.crt)" \
   --variable jenkins_user=... --variable jenkins_api_token=... \
   --variable image_registry_username=... --variable image_registry_password=...
 ```
@@ -61,7 +60,7 @@ Same setup as the Railway template; [its README](../railway/README.md#tailscale)
 - `tailscaled` runs with a SOCKS5 + HTTP proxy on `localhost:1055` and `--state=mem:`, so the node is ephemeral. A stop script logs it out, so the hostname stays `coder-<owner>-<workspace>` without `-1`, `-2` suffixes. `tailscale up` uses `--accept-routes`.
 - With `/dev/net/tun` on the node (mounted when a key is set), `tailscaled` uses kernel networking. The tailnet, its subnet routes and its DNS then work for every process, and the proxy is optional. Without it, it falls back to userspace networking: nothing is routed into the tailnet, the proxy is the way in, and the script also starts `ts-dns-forward` (names under `tailscale_dns_domains` resolved by the tailnet DNS server) and sets `TS_DEBUG_MTU=1200`.
 - The proxy is **opt-in per command** (`curl --proxy socks5h://localhost:1055 ...`). No `*_PROXY` is set globally, except for Claude Code: `/etc/claude-code/managed-settings.json` gets `HTTPS_PROXY`/`HTTP_PROXY=http://localhost:1055` and `NO_PROXY=localhost,127.0.0.1,::1,.svc,.cluster.local,<Coder access URL host>`, so its HTTP MCP servers reach the tailnet.
-- `internal_ca_cert` (system trust store + `NODE_EXTRA_CA_CERTS`) and `jenkins_user`/`jenkins_api_token` (the `jenkins` MCP server in Claude Code, with the credentials only in the agent env) work as in the Railway template.
+- The dev-k8s CA (`internal_ca_install_url`, checked against `internal_ca_fingerprint`; system trust store + `NODE_EXTRA_CA_CERTS`) and `jenkins_user`/`jenkins_api_token` (the `jenkins` MCP server in Claude Code, with the credentials only in the agent env) work as in the Railway template.
 
 ```sh
 curl --proxy socks5h://localhost:1055 https://jenkins.dev-k8s.vicedomini.corp/login

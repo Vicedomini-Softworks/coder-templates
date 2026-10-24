@@ -138,14 +138,26 @@ variable "tailscale_dns_domains" {
   EOT
 }
 
-variable "internal_ca_cert" {
+variable "internal_ca_install_url" {
   type        = string
-  default     = ""
+  default     = "http://ca.dev-k8s.vicedomini.corp/install.sh"
   description = <<-EOT
-    Optional PEM certificate(s) of an internal CA (e.g. the dev-k8s CA that
-    signs *.dev-k8s.vicedomini.corp). When set, it is added to the system
-    trust store and to NODE_EXTRA_CA_CERTS, so curl, git and Claude Code
-    (including its HTTP MCP servers) trust internal services.
+    Install script of the internal CA (the dev-k8s CA that signs
+    *.dev-k8s.vicedomini.corp, name-constrained to that domain). Fetched and
+    run as root through the tailnet on every start, after `tailscale up`, so
+    curl, git and Claude Code (including its HTTP MCP servers) trust internal
+    services. Empty to skip. Needs tailscale_auth_key.
+  EOT
+}
+
+variable "internal_ca_fingerprint" {
+  type        = string
+  default     = "D2:FA:9D:F4:46:2F:61:E3:A1:56:7B:AA:0C:88:CF:B1:8A:39:AC:21:52:73:85:5E:01:6F:B0:04:F2:CE:1F:C9"
+  description = <<-EOT
+    SHA-256 fingerprint of the internal CA, passed to the install script as
+    EXPECTED_FP: the CA is installed only if it matches (the script and the
+    CA come over plain HTTP). The default is the dev-k8s CA's; update it when
+    the CA is rotated. Empty to install without checking.
   EOT
 }
 
@@ -187,7 +199,6 @@ locals {
   # Claude Code goes through the tailscaled proxy; these stay direct.
   coder_host      = regex("^[a-z]+://([^/:]+)", data.coder_workspace.me.access_url)[0]
   claude_no_proxy = "localhost,127.0.0.1,::1,.railway.internal,${local.coder_host}"
-  internal_ca     = "/usr/local/share/ca-certificates/internal-ca.crt"
   use_jenkins_mcp = var.jenkins_user != "" && nonsensitive(var.jenkins_api_token != "")
 }
 
@@ -260,7 +271,9 @@ resource "coder_agent" "main" {
     },
     var.claude_code_oauth_token != "" ? { CLAUDE_CODE_OAUTH_TOKEN = var.claude_code_oauth_token } : {},
     var.tailscale_auth_key != "" ? { TS_AUTHKEY = var.tailscale_auth_key } : {},
-    var.internal_ca_cert != "" ? { NODE_EXTRA_CA_CERTS = local.internal_ca } : {},
+    # Node tools only use their bundled roots: also trust the system store,
+    # where the internal CA is installed.
+    var.internal_ca_install_url != "" ? { NODE_EXTRA_CA_CERTS = "/etc/ssl/certs/ca-certificates.crt" } : {},
     local.use_jenkins_mcp ? {
       JENKINS_MCP_AUTHORIZATION = "Basic ${base64encode("${var.jenkins_user}:${var.jenkins_api_token}")}"
     } : {},
@@ -746,6 +759,22 @@ resource "coder_script" "tailscale" {
       fi
     fi
 
+    # Internal CA: its install script and the ca.crt it downloads live on
+    # the tailnet, hence the proxy for both (http_proxy for the script's own
+    # curl). Plain HTTP, but inside the tailnet; internal_ca_fingerprint
+    # makes the script refuse a CA with a different fingerprint.
+    CA_INSTALL_URL="${var.internal_ca_install_url}"
+    if [ -n "$CA_INSTALL_URL" ]; then
+      CA_SCRIPT=$(mktemp)
+      if curl -fsSL --max-time 30 --proxy http://localhost:1055 "$CA_INSTALL_URL" -o "$CA_SCRIPT" \
+        && sudo env http_proxy=http://localhost:1055 EXPECTED_FP="${var.internal_ca_fingerprint}" sh "$CA_SCRIPT"; then
+        echo "Internal CA installed ($CA_INSTALL_URL)."
+      else
+        echo "WARNING: internal CA install from $CA_INSTALL_URL failed."
+      fi
+      rm -f "$CA_SCRIPT"
+    fi
+
     # Point Claude Code (only) at the proxy, so its HTTP MCP servers reach
     # the tailnet; everything else keeps going out directly. Managed
     # settings live on the container filesystem, so they never outlive
@@ -778,24 +807,6 @@ resource "coder_script" "tailscale_logout" {
 
   script = <<-EOT
     sudo timeout 10 tailscale logout || true
-  EOT
-}
-
-# Optional: trust an internal CA (system store + NODE_EXTRA_CA_CERTS in the
-# agent env). A CA certificate is public, so it can travel in the script.
-resource "coder_script" "internal_ca" {
-  count              = var.internal_ca_cert != "" ? 1 : 0
-  agent_id           = coder_agent.main.id
-  display_name       = "Internal CA"
-  icon               = "/emojis/1f512.png"
-  run_on_start       = true
-  start_blocks_login = false
-
-  script = <<-EOT
-    set -eu
-    echo "${base64encode(var.internal_ca_cert)}" | base64 -d | sudo tee "${local.internal_ca}" > /dev/null
-    sudo update-ca-certificates > /dev/null
-    echo "Internal CA installed: ${local.internal_ca}"
   EOT
 }
 

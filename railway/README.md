@@ -70,10 +70,9 @@ coder templates push railway --directory . \
 
 The key must be **reusable** (every start is a new container that registers again). It does not need to be ephemeral: `tailscaled` runs with `--state=mem:`, so the node is ephemeral anyway (see [Tailscale](#tailscale)).
 
-Optional, for internal services and the Jenkins MCP server (see [Tailscale](#tailscale)):
+Optional, for the Jenkins MCP server (see [Tailscale](#tailscale)):
 
 ```sh
-  --variable internal_ca_cert="$(cat dev-k8s-ca.crt)" \
   --variable jenkins_user=... --variable jenkins_api_token=...
 ```
 
@@ -111,7 +110,7 @@ What the startup script sets up so this works:
 
 The startup script writes `HTTPS_PROXY`/`HTTP_PROXY=http://localhost:1055` and a `NO_PROXY` (`localhost,127.0.0.1,::1,.railway.internal,<Coder access URL host>`) to the `env` of `/etc/claude-code/managed-settings.json`. Only Claude Code (CLI and IDE extensions) uses them, so its HTTP MCP servers reach the tailnet. The proxy also forwards non-tailnet traffic, so `api.anthropic.com` keeps working. The file lives on the container filesystem, never on the home volume, so it disappears with the container. Processes Claude Code starts (its Bash tool, stdio MCP servers) inherit the variables.
 
-`*.dev-k8s.vicedomini.corp` is signed by the internal `dev-k8s CA`. Pass its PEM as `internal_ca_cert`: it is added to the system trust store, and `NODE_EXTRA_CA_CERTS` points Claude Code at it. Without it, curl fails with `unable to get local issuer certificate` and Claude Code with `UNABLE_TO_VERIFY_LEAF_SIGNATURE`.
+`*.dev-k8s.vicedomini.corp` is signed by the internal `dev-k8s CA`, name-constrained to `dev-k8s.vicedomini.corp`. After `tailscale up`, the startup script fetches `internal_ca_install_url` (default `http://ca.dev-k8s.vicedomini.corp/install.sh`) through the proxy. It runs the script as root, with `http_proxy` set so the script's own `ca.crt` download also goes through the tailnet. The script adds the CA to the system trust store (curl, git) and `/etc/docker/certs.d`. Script and CA come over plain HTTP, so it gets `EXPECTED_FP=<internal_ca_fingerprint>` and refuses a CA with a different fingerprint. The default is the dev-k8s CA's fingerprint `D2:FA:9D:…:1F:C9`; update it when the CA is rotated. `NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt` in the agent env makes Node tools, Claude Code included, trust the system store too. Without the CA, curl fails with `unable to get local issuer certificate` and Claude Code with `UNABLE_TO_VERIFY_LEAF_SIGNATURE`. Set `internal_ca_install_url` to empty to skip it.
 
 With `jenkins_user` + `jenkins_api_token` set, every start registers the Jenkins MCP server (`jenkins_mcp_url`) in Claude Code at user scope, equivalent to:
 

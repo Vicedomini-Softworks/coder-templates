@@ -762,12 +762,25 @@ resource "coder_script" "tailscale" {
     # Internal CA: its install script and the ca.crt it downloads live on
     # the tailnet, hence the proxy for both (http_proxy for the script's own
     # curl). Plain HTTP, but inside the tailnet; internal_ca_fingerprint
-    # makes the script refuse a CA with a different fingerprint.
+    # makes the script refuse a CA with a different fingerprint. Right
+    # after `tailscale up` the route to it may not be ready yet (the proxy
+    # answers 502), so the download and the install are retried together
+    # for about two minutes.
     CA_INSTALL_URL="${var.internal_ca_install_url}"
     if [ -n "$CA_INSTALL_URL" ]; then
       CA_SCRIPT=$(mktemp)
-      if curl -fsSL --max-time 30 --proxy http://localhost:1055 "$CA_INSTALL_URL" -o "$CA_SCRIPT" \
-        && sudo env http_proxy=http://localhost:1055 EXPECTED_FP="${var.internal_ca_fingerprint}" sh "$CA_SCRIPT"; then
+      CA_OK=""
+      for attempt in $(seq 1 12); do
+        if curl -fsSL --max-time 30 --proxy http://localhost:1055 "$CA_INSTALL_URL" -o "$CA_SCRIPT" \
+          && sudo env http_proxy=http://localhost:1055 EXPECTED_FP="${var.internal_ca_fingerprint}" sh "$CA_SCRIPT"; then
+          CA_OK=1
+          break
+        fi
+        [ "$attempt" -lt 12 ] || break
+        echo "Internal CA install attempt $attempt failed; retrying in 10s."
+        sleep 10
+      done
+      if [ -n "$CA_OK" ]; then
         echo "Internal CA installed ($CA_INSTALL_URL)."
       else
         echo "WARNING: internal CA install from $CA_INSTALL_URL failed."

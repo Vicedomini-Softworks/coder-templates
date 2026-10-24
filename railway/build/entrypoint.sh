@@ -18,10 +18,22 @@ if [ "$(id -u)" = "0" ]; then
     # Without /dev/net/tun (typical on Railway) fall back to userspace mode.
     # SOCKS5 + HTTP proxy on localhost:1055 (one port, both protocols) so
     # programs can reach the tailnet in userspace mode, opt-in per command
-    # (`curl --proxy socks5h://localhost:1055 ...`); no global *_PROXY env.
-    TS_FLAGS="--socks5-server=localhost:1055 --outbound-http-proxy-listen=localhost:1055"
-    [ -c /dev/net/tun ] || TS_FLAGS="$TS_FLAGS --tun=userspace-networking"
-    tailscaled $TS_FLAGS > /tmp/tailscaled.log 2>&1 &
+    # (`curl --proxy socks5h://localhost:1055 ...`); no global *_PROXY env
+    # (only Claude Code is pointed at it, by the template's tailscale script).
+    # --state=mem: registers an ephemeral node: every start is a new
+    # container, so old nodes leave the tailnet instead of piling up as
+    # -1, -2, ... In userspace mode the netstack MTU is lowered to 1200:
+    # with the default 1280, large TCP segments from subnet routers are
+    # dropped on direct (non-DERP) paths and TLS handshakes hang.
+    TS_FLAGS="--state=mem: --socks5-server=localhost:1055 --outbound-http-proxy-listen=localhost:1055"
+    TS_ENV=""
+    if [ ! -c /dev/net/tun ]; then
+      TS_FLAGS="$TS_FLAGS --tun=userspace-networking"
+      TS_ENV="TS_DEBUG_MTU=1200"
+    fi
+    # Subshell: tailscaled is reparented to tini, which reaps it if it is
+    # ever restarted (a direct child of the su below would stay a zombie).
+    (env $TS_ENV tailscaled $TS_FLAGS > /tmp/tailscaled.log 2>&1 &)
     chmod 666 /tmp/tailscaled.log 2> /dev/null || true
   fi
   command -v warp-svc > /dev/null 2>&1 && warp-svc > /tmp/warp-svc.log 2>&1 &

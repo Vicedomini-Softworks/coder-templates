@@ -121,9 +121,56 @@ variable "tailscale_auth_key" {
   description = <<-EOT
     Optional Tailscale auth key (https://login.tailscale.com/admin/settings/keys).
     When set, each workspace runs `tailscale up --auth-key=...` on start and
-    joins your tailnet as `coder-<owner>-<workspace>`. When empty, Tailscale
-    is not started. Shared by all workspaces created from this template.
+    joins your tailnet as `coder-<owner>-<workspace>`, as an ephemeral node
+    (in-memory state). When empty, Tailscale is not started. Shared by all
+    workspaces created from this template.
   EOT
+}
+
+variable "tailscale_dns_domains" {
+  type        = string
+  default     = "vicedomini.corp"
+  description = <<-EOT
+    Comma-separated DNS domains resolved by the tailnet's private DNS server
+    (the first private IPv4 resolver in the tailnet DNS settings) instead of
+    Railway's resolver. Needed in userspace-networking mode, where tailscaled
+    and its proxy resolve names through /etc/resolv.conf. Empty to disable.
+  EOT
+}
+
+variable "internal_ca_cert" {
+  type        = string
+  default     = ""
+  description = <<-EOT
+    Optional PEM certificate(s) of an internal CA (e.g. the dev-k8s CA that
+    signs *.dev-k8s.vicedomini.corp). When set, it is added to the system
+    trust store and to NODE_EXTRA_CA_CERTS, so curl, git and Claude Code
+    (including its HTTP MCP servers) trust internal services.
+  EOT
+}
+
+variable "jenkins_user" {
+  type        = string
+  default     = ""
+  description = "Optional Jenkins user for the Claude Code `jenkins` MCP server (with jenkins_api_token)."
+}
+
+variable "jenkins_api_token" {
+  type        = string
+  default     = ""
+  sensitive   = true
+  description = <<-EOT
+    Optional Jenkins API token. When it and jenkins_user are set, every
+    workspace registers the `jenkins` HTTP MCP server in Claude Code (user
+    scope) on start. The credentials reach the workspace only as the agent
+    env var JENKINS_MCP_AUTHORIZATION, which the MCP config references.
+  EOT
+}
+
+variable "jenkins_mcp_url" {
+  type        = string
+  default     = "https://jenkins.dev-k8s.vicedomini.corp/mcp-server/mcp"
+  description = "URL of the Jenkins MCP server endpoint."
 }
 
 provider "coder" {}
@@ -136,6 +183,12 @@ locals {
   state_dir    = "${path.module}/.railway-state"
   scripts_dir  = "${path.module}/scripts"
   project_name = lower(substr("coder-${local.username}-${local.workspace}", 0, 32))
+
+  # Claude Code goes through the tailscaled proxy; these stay direct.
+  coder_host      = regex("^[a-z]+://([^/:]+)", data.coder_workspace.me.access_url)[0]
+  claude_no_proxy = "localhost,127.0.0.1,::1,.railway.internal,${local.coder_host}"
+  internal_ca     = "/usr/local/share/ca-certificates/internal-ca.crt"
+  use_jenkins_mcp = var.jenkins_user != "" && nonsensitive(var.jenkins_api_token != "")
 }
 
 data "coder_provisioner" "me" {}
@@ -207,6 +260,10 @@ resource "coder_agent" "main" {
     },
     var.claude_code_oauth_token != "" ? { CLAUDE_CODE_OAUTH_TOKEN = var.claude_code_oauth_token } : {},
     var.tailscale_auth_key != "" ? { TS_AUTHKEY = var.tailscale_auth_key } : {},
+    var.internal_ca_cert != "" ? { NODE_EXTRA_CA_CERTS = local.internal_ca } : {},
+    local.use_jenkins_mcp ? {
+      JENKINS_MCP_AUTHORIZATION = "Basic ${base64encode("${var.jenkins_user}:${var.jenkins_api_token}")}"
+    } : {},
   )
 
   metadata {
@@ -587,8 +644,10 @@ resource "coder_script" "railway_cli" {
 # Optional: join the workspace to a tailnet on start. Only created when
 # var.tailscale_auth_key is set; without a key Tailscale is not started.
 # The key reaches the script through the agent env (TS_AUTHKEY), not the
-# script body. The tailscale package itself is baked into the image
-# (build/Dockerfile); the install fallback below only covers custom images.
+# script body. The tailscale package and ts-dns-forward are baked into the
+# image (build/Dockerfile); the install fallback below only covers custom
+# images. Every step is best-effort and start_blocks_login is false: a
+# Tailscale problem never keeps the workspace from starting.
 resource "coder_script" "tailscale" {
   count              = var.tailscale_auth_key != "" ? 1 : 0
   agent_id           = coder_agent.main.id
@@ -598,33 +657,168 @@ resource "coder_script" "tailscale" {
   start_blocks_login = false
 
   script = <<-EOT
-    set -eu
+    set -u
 
     if ! command -v tailscale > /dev/null 2>&1; then
       echo "Installing Tailscale..."
-      curl -fsSL https://tailscale.com/install.sh | sh
+      curl -fsSL https://tailscale.com/install.sh | sh || true
+    fi
+    if ! command -v tailscaled > /dev/null 2>&1; then
+      echo "ERROR: tailscaled not available; Tailscale skipped."
+      exit 1
     fi
 
-    # The image entrypoint starts tailscaled as root (needs /dev/net/tun).
-    # If it isn't up, start it ourselves, falling back to userspace
-    # networking when the container has no TUN device. Same flags as the
-    # entrypoint: SOCKS5 + HTTP proxy on localhost:1055, used per command.
-    TS_PROXY_FLAGS="--socks5-server=localhost:1055 --outbound-http-proxy-listen=localhost:1055"
-    if ! sudo tailscale status > /dev/null 2>&1 && ! pgrep -x tailscaled > /dev/null; then
-      if [ -c /dev/net/tun ]; then
-        sudo sh -c "nohup tailscaled $TS_PROXY_FLAGS > /tmp/tailscaled.log 2>&1 &"
-      else
-        echo "No /dev/net/tun; starting tailscaled in userspace-networking mode."
-        sudo sh -c "nohup tailscaled $TS_PROXY_FLAGS --tun=userspace-networking > /tmp/tailscaled.log 2>&1 &"
-      fi
+    # Same daemon setup as the image entrypoint (see build/entrypoint.sh):
+    # SOCKS5 + HTTP proxy on localhost:1055, in-memory state (ephemeral
+    # node), userspace networking with MTU 1200 when there is no TUN device.
+    TS_FLAGS="--state=mem: --socks5-server=localhost:1055 --outbound-http-proxy-listen=localhost:1055"
+    TS_ENV=""
+    if [ ! -c /dev/net/tun ]; then
+      TS_FLAGS="$TS_FLAGS --tun=userspace-networking"
+      TS_ENV="TS_DEBUG_MTU=1200"
     fi
+    proxy_up() { timeout 2 bash -c ': < /dev/tcp/127.0.0.1/1055' 2> /dev/null; }
+    # Ignores zombies: a tailscaled started by an older entrypoint stays
+    # <defunct> after a kill (its parent never reaps it), and pgrep would
+    # still match it.
+    ts_running() { ps -C tailscaled -o stat= 2> /dev/null | grep -qv '^Z'; }
 
+    # An older image's entrypoint starts tailscaled without the proxy (or
+    # with on-disk state): restart it with the flags above. Log out first so
+    # its node is released instead of lingering in the tailnet.
+    if ts_running && ! proxy_up; then
+      echo "tailscaled is running without the localhost:1055 proxy; restarting it."
+      sudo timeout 15 tailscale logout > /dev/null 2>&1 || true
+      sudo pkill -x tailscaled || true
+      for _ in $(seq 1 10); do
+        ts_running || break
+        sleep 1
+      done
+      sudo pkill -9 -x tailscaled 2> /dev/null || true
+    fi
+    if ! ts_running; then
+      [ -c /dev/net/tun ] || echo "No /dev/net/tun; starting tailscaled in userspace-networking mode."
+      sudo sh -c "$TS_ENV nohup tailscaled $TS_FLAGS > /tmp/tailscaled.log 2>&1 &"
+    fi
     for _ in $(seq 1 30); do
-      [ -S /var/run/tailscale/tailscaled.sock ] && break
+      [ -S /var/run/tailscale/tailscaled.sock ] && proxy_up && break
       sleep 1
     done
 
-    sudo tailscale up --auth-key="$TS_AUTHKEY" --hostname="${local.project_name}"
-    echo "Tailscale up: $(tailscale ip -4 2>/dev/null | head -n1)"
+    # --accept-routes: internal services (and the tailnet DNS server) sit
+    # behind subnet routers, e.g. 10.0.0.0/16.
+    if ! sudo timeout 90 tailscale up --auth-key="$TS_AUTHKEY" --hostname="${local.project_name}" --accept-routes; then
+      echo "ERROR: tailscale up failed; see /tmp/tailscaled.log."
+      exit 1
+    fi
+    echo "Tailscale up: $(tailscale ip -4 2> /dev/null | head -n1)"
+
+    # Userspace mode: tailscaled (and so its proxy) resolves names through
+    # /etc/resolv.conf, never through the tailnet DNS settings. Put
+    # ts-dns-forward in front: names under the configured domains go to the
+    # tailnet's private DNS server through the proxy, the rest to the
+    # original nameservers. Only lookups of those domains change.
+    DNS_DOMAINS="${var.tailscale_dns_domains}"
+    if [ ! -c /dev/net/tun ] && [ -n "$DNS_DOMAINS" ]; then
+      TAILNET_DNS=$(sudo tailscale dns status --json 2> /dev/null \
+        | jq -r '[.Resolvers[]?.Addr | select(test("^(10\\.|192\\.168\\.|172\\.(1[6-9]|2[0-9]|3[01])\\.)"))][0] // empty' 2> /dev/null)
+      [ -f /etc/resolv.conf.pre-tailscale ] || sudo cp /etc/resolv.conf /etc/resolv.conf.pre-tailscale
+      FALLBACK=$(awk '$1 == "nameserver" && $2 != "127.0.0.53" { print $2 }' /etc/resolv.conf.pre-tailscale | paste -sd, -)
+      if ! command -v ts-dns-forward > /dev/null 2>&1; then
+        echo "WARNING: ts-dns-forward not in this image; $DNS_DOMAINS names will not resolve."
+      elif [ -z "$TAILNET_DNS" ] || [ -z "$FALLBACK" ]; then
+        echo "WARNING: no private tailnet DNS server or no system nameserver; DNS forwarder not started."
+      else
+        if ! ss -lun | grep -q '127\.0\.0\.53:53 '; then
+          sudo sh -c "nohup ts-dns-forward --domains '$DNS_DOMAINS' --tailnet-dns $TAILNET_DNS --fallback $FALLBACK > /tmp/ts-dns-forward.log 2>&1 &"
+          for _ in $(seq 1 10); do
+            ss -lun | grep -q '127\.0\.0\.53:53 ' && break
+            sleep 1
+          done
+        fi
+        if ss -lun | grep -q '127\.0\.0\.53:53 '; then
+          { echo "nameserver 127.0.0.53"; grep -v '^nameserver 127\.0\.0\.53' /etc/resolv.conf.pre-tailscale; } \
+            | sudo tee /etc/resolv.conf > /dev/null
+          echo "DNS: $DNS_DOMAINS -> $TAILNET_DNS via the tailnet, rest -> $FALLBACK."
+        else
+          echo "WARNING: DNS forwarder failed to start; see /tmp/ts-dns-forward.log."
+        fi
+      fi
+    fi
+
+    # Point Claude Code (only) at the proxy, so its HTTP MCP servers reach
+    # the tailnet; everything else keeps going out directly. Managed
+    # settings live on the container filesystem, so they never outlive
+    # this container (unlike ~/.claude on the persistent volume).
+    if proxy_up && command -v jq > /dev/null 2>&1; then
+      MANAGED=/etc/claude-code/managed-settings.json
+      sudo mkdir -p /etc/claude-code
+      { sudo cat "$MANAGED" 2> /dev/null || echo '{}'; } \
+        | jq --arg proxy "http://localhost:1055" --arg no_proxy "${local.claude_no_proxy}" \
+          '.env = ((.env // {}) + {HTTPS_PROXY: $proxy, HTTP_PROXY: $proxy, NO_PROXY: $no_proxy})' \
+        | sudo tee "$MANAGED.tmp" > /dev/null \
+        && sudo mv "$MANAGED.tmp" "$MANAGED" \
+        && sudo chmod 644 "$MANAGED" \
+        && echo "Claude Code proxied via localhost:1055 ($MANAGED)."
+    else
+      echo "WARNING: nothing listening on localhost:1055; Claude Code left unproxied."
+    fi
+  EOT
+}
+
+# The node is ephemeral, so logging out on stop removes it from the tailnet
+# right away and the next start keeps the same hostname (instead of a -1
+# suffix until the control plane reaps the offline node).
+resource "coder_script" "tailscale_logout" {
+  count        = var.tailscale_auth_key != "" ? 1 : 0
+  agent_id     = coder_agent.main.id
+  display_name = "Tailscale logout"
+  icon         = "/icon/tailscale.svg"
+  run_on_stop  = true
+
+  script = <<-EOT
+    sudo timeout 10 tailscale logout || true
+  EOT
+}
+
+# Optional: trust an internal CA (system store + NODE_EXTRA_CA_CERTS in the
+# agent env). A CA certificate is public, so it can travel in the script.
+resource "coder_script" "internal_ca" {
+  count              = var.internal_ca_cert != "" ? 1 : 0
+  agent_id           = coder_agent.main.id
+  display_name       = "Internal CA"
+  icon               = "/emojis/1f512.png"
+  run_on_start       = true
+  start_blocks_login = false
+
+  script = <<-EOT
+    set -eu
+    echo "${base64encode(var.internal_ca_cert)}" | base64 -d | sudo tee "${local.internal_ca}" > /dev/null
+    sudo update-ca-certificates > /dev/null
+    echo "Internal CA installed: ${local.internal_ca}"
+  EOT
+}
+
+# Optional: register the Jenkins MCP server in Claude Code (user scope, in
+# ~/.claude.json). The header references $JENKINS_MCP_AUTHORIZATION, which
+# Claude Code expands at connect time from the agent env: the credentials
+# are never written to the script body or to disk.
+resource "coder_script" "jenkins_mcp" {
+  count              = local.use_jenkins_mcp ? 1 : 0
+  agent_id           = coder_agent.main.id
+  display_name       = "Jenkins MCP"
+  icon               = "/icon/jenkins.svg"
+  run_on_start       = true
+  start_blocks_login = false
+
+  script = <<-EOT
+    set -u
+    if ! command -v claude > /dev/null 2>&1; then
+      echo "claude not installed; Jenkins MCP not registered."
+      exit 0
+    fi
+    claude mcp remove --scope user jenkins > /dev/null 2>&1 || true
+    claude mcp add --scope user --transport http jenkins "${var.jenkins_mcp_url}" \
+      --header 'Authorization: $${JENKINS_MCP_AUTHORIZATION}'
   EOT
 }

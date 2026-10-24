@@ -60,7 +60,7 @@ coder templates push railway --directory . \
   --variable claude_code_oauth_token=sk-ant-oat01-...
 ```
 
-To join every workspace to your tailnet, pass a Tailscale auth key (exported as `$TS_AUTHKEY`; on start the workspace runs `tailscale up --auth-key=... --hostname=<project name>`). If the variable is empty, Tailscale is not started:
+To join every workspace to your tailnet, pass a Tailscale auth key (exported as `$TS_AUTHKEY`; on start the workspace runs `tailscale up --auth-key=... --hostname=<project name> --accept-routes`). If the variable is empty, Tailscale is not started:
 
 ```sh
 coder templates push railway --directory . \
@@ -68,15 +68,68 @@ coder templates push railway --directory . \
   --variable tailscale_auth_key=tskey-auth-...
 ```
 
+The key must be **reusable** (every start is a new container that registers again). It does not need to be ephemeral: `tailscaled` runs with `--state=mem:`, so the node is ephemeral anyway (see [Tailscale](#tailscale)).
+
+Optional, for internal services and the Jenkins MCP server (see [Tailscale](#tailscale)):
+
+```sh
+  --variable internal_ca_cert="$(cat dev-k8s-ca.crt)" \
+  --variable jenkins_user=... --variable jenkins_api_token=...
+```
+
+### Pushing a new version
+
+`coder templates push` reuses the previous version's variable values unless they are passed again, **including `workspace_image`**: a plain push after an image change keeps deploying the old image. Push with [`../push-template.sh`](../push-template.sh) instead. It pins `workspace_image` to the immutable `:<commit sha>` tag CI pushed to Docker Hub for the newest built commit of `origin/main`. It refuses to push while a `railway/build` change has no image yet. The other variables keep their values:
+
+```sh
+./push-template.sh railway            # from the repo root
+./push-template.sh kubernetes
+```
+
+Running workspaces pick the new version up on their next `coder update` / restart.
+
 ## Tailscale
 
-When `tailscale_auth_key` is set, `tailscaled` runs with a local SOCKS5 and HTTP proxy on `localhost:1055` (`--socks5-server` / `--outbound-http-proxy-listen`, both on the same port). In userspace-networking mode (Railway exposes no `/dev/net/tun`) nothing in the workspace can reach the tailnet directly: `.corp` names don't resolve and the `10.0.0.0/16` subnets aren't routed, so go through the proxy. The proxy is **opt-in per command**: `ALL_PROXY`/`HTTPS_PROXY`/`HTTP_PROXY` are deliberately not set, so GitHub, npm, Composer, apt and the Coder agent keep going out directly.
+When `tailscale_auth_key` is set, `tailscaled` runs with a local SOCKS5 and HTTP proxy on `localhost:1055` (`--socks5-server` / `--outbound-http-proxy-listen`, both on the same port). Railway exposes no `/dev/net/tun`, so it runs in userspace-networking mode: nothing in the workspace is routed into the tailnet, and the proxy is the way in. The `Tailscale` startup script (re)starts `tailscaled` with these flags even when an older image's entrypoint already started it without them. It never blocks the workspace start.
+
+The proxy is **opt-in per command**: `ALL_PROXY`/`HTTPS_PROXY`/`HTTP_PROXY` are deliberately not set globally, so GitHub, npm, Composer, apt and the Coder agent keep going out directly. Claude Code is the exception (below).
 
 ```sh
 curl --proxy socks5h://localhost:1055 https://jenkins.dev-k8s.vicedomini.corp/login
 ```
 
-Use `socks5h://` (not `socks5://`): with the `h` the hostname is resolved by `tailscaled` on the tailnet (MagicDNS / split DNS), which is the only way `.corp` names resolve. Tools without SOCKS support can use the HTTP proxy on the same port, e.g. `HTTPS_PROXY=http://localhost:1055 some-tool ...` for a single command. `tailscale nc <host> <port>` also works for raw TCP.
+Tools without SOCKS support can use the HTTP proxy on the same port, e.g. `HTTPS_PROXY=http://localhost:1055 some-tool ...` for a single command. `tailscale nc <host> <port>` also works for raw TCP.
+
+What the startup script sets up so this works:
+
+- **Ephemeral node, stable hostname.** `--state=mem:` registers an ephemeral node, and a stop script runs `tailscale logout`, so the node of a stopped workspace leaves the tailnet instead of piling up as `coder-<owner>-<workspace>-1`, `-2`, … If the agent is killed without a graceful stop, the control plane removes the offline ephemeral node by itself after a while. Nodes registered by older versions of this template were not ephemeral: delete them once in the admin console, or the hostname keeps its `-1` suffix.
+- **Subnet routes.** `--accept-routes`, because internal services and the tailnet DNS server (10.0.0.10) sit behind subnet routers (`10.0.0.0/16`).
+- **DNS.** In userspace mode `tailscaled` resolves the names it proxies with `/etc/resolv.conf`, **not** with the tailnet DNS settings, so `.corp` names fail with `no such host` even through `socks5h://`. The script starts [`ts-dns-forward`](./build/ts-dns-forward.py) on `127.0.0.53` and puts it first in `/etc/resolv.conf` (original saved as `/etc/resolv.conf.pre-tailscale`). Names under `tailscale_dns_domains` (default `vicedomini.corp`) go as DNS-over-TCP through the proxy to the first private resolver of the tailnet DNS settings. Everything else (`railway.internal`, public names) goes to Railway's resolver as before. Log: `/tmp/ts-dns-forward.log`.
+- **MTU.** In userspace mode `tailscaled` gets `TS_DEBUG_MTU=1200`. With the default 1280, large TCP segments from the subnet router are dropped on direct (non-DERP) paths: DNS and small HTTP responses work, but TLS handshakes hang.
+
+### Claude Code and MCP servers
+
+The startup script writes `HTTPS_PROXY`/`HTTP_PROXY=http://localhost:1055` and a `NO_PROXY` (`localhost,127.0.0.1,::1,.railway.internal,<Coder access URL host>`) to the `env` of `/etc/claude-code/managed-settings.json`. Only Claude Code (CLI and IDE extensions) uses them, so its HTTP MCP servers reach the tailnet. The proxy also forwards non-tailnet traffic, so `api.anthropic.com` keeps working. The file lives on the container filesystem, never on the home volume, so it disappears with the container. Processes Claude Code starts (its Bash tool, stdio MCP servers) inherit the variables.
+
+`*.dev-k8s.vicedomini.corp` is signed by the internal `dev-k8s CA`. Pass its PEM as `internal_ca_cert`: it is added to the system trust store, and `NODE_EXTRA_CA_CERTS` points Claude Code at it. Without it, curl fails with `unable to get local issuer certificate` and Claude Code with `UNABLE_TO_VERIFY_LEAF_SIGNATURE`.
+
+With `jenkins_user` + `jenkins_api_token` set, every start registers the Jenkins MCP server (`jenkins_mcp_url`) in Claude Code at user scope, equivalent to:
+
+```sh
+claude mcp add --scope user --transport http jenkins https://jenkins.dev-k8s.vicedomini.corp/mcp-server/mcp \
+  --header 'Authorization: ${JENKINS_MCP_AUTHORIZATION}'
+```
+
+The agent env holds `JENKINS_MCP_AUTHORIZATION=Basic <base64 user:token>`, and Claude Code expands the reference at connect time. The token is never in a script body or in `~/.claude.json`.
+
+Check from a workspace:
+
+```sh
+pgrep -a tailscaled                 # --state=mem: --socks5-server=... --tun=userspace-networking
+ss -ltn | grep 1055
+curl -sS --proxy socks5h://localhost:1055 -o /dev/null -w '%{http_code}\n' https://jenkins.dev-k8s.vicedomini.corp/login
+claude mcp list                     # jenkins: ✓ Connected (or "Needs authentication" without the token)
+```
 
 ## Usage
 
@@ -103,7 +156,8 @@ Persistent (survive stop/start): project, service, volume, project token. Epheme
 The default image is `ghcr.io/bpmct/railway-coder-workspace:latest`, which is `codercom/enterprise-base:ubuntu` plus a small entrypoint that fixes Railway volume ownership, decodes `CODER_INIT_SCRIPT_B64`, and runs the Coder agent as the `coder` user. The Dockerfile and entrypoint are vendored in this template under [`build/`](./build) so you can read, fork, or extend them without leaving the registry:
 
 - [`build/Dockerfile`](./build/Dockerfile) - layer on `codercom/enterprise-base:ubuntu` adding the Claude Code, Cursor, Kiro and [pi.dev](https://pi.dev) coding-agent CLIs, GitHub CLI (`gh`), cloudflared/WARP/Tailscale, rootless Podman, PHP 8.5 + Composer, kubectl + kustomize, SDKMAN (Java 8/11/21, Maven, JBang), Node.js 22, Playwright/Chromium and `tini` as PID 1 (process reaper).
-- [`build/entrypoint.sh`](./build/entrypoint.sh) - Railway volume `chown`, skeleton seed, `CODER_INIT_SCRIPT_B64` decode + drop to `coder`.
+- [`build/entrypoint.sh`](./build/entrypoint.sh) - Railway volume `chown`, `tailscaled`/`warp-svc` start, skeleton seed, `CODER_INIT_SCRIPT_B64` decode + drop to `coder`.
+- [`build/ts-dns-forward.py`](./build/ts-dns-forward.py) - split DNS forwarder for `tailscaled` in userspace mode (see [Tailscale](#tailscale)).
 - [`build/pi-models.json`](./build/pi-models.json) - regolo.ai custom provider for pi (see below).
 
 Node.js 22 is installed **system-wide** via a shared NVM in `/opt/nvm`, with `node`/`npm`/`npx` symlinked into `/usr/local/bin`. That puts Node on PATH for every shell - including non-interactive ones (`coder ssh <ws> -- cmd`, code-server tasks, agent scripts) and workspaces whose home volume still carries rc files from older images, since entrypoint backfills never overwrite existing rc files. The `nvm` shell function is still available in login/interactive shells for switching versions; versions installed at runtime live in `/opt` and reset to the image's default on the next start.

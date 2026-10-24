@@ -16,7 +16,7 @@ Same workspace as the [`railway`](../railway) template, running on a Kubernetes 
 | Persistent | project, service, volume | PVC (`/home/coder`), optional pull secret |
 | Ephemeral (per start) | env vars, image deploy | Deployment |
 | Parameters | `region`, `git_repo_url` | `git_repo_url` |
-| Variables | `railway_token`, `enable_project_management`, `workspace_image`, `image_registry_*`, `claude_code_oauth_token`, `tailscale_auth_key` | `kubeconfig`, `namespace`, `storage_class`, `home_disk_size`, `cpu_limit`, `memory_limit`, `workspace_image`, `image_registry_*`, `claude_code_oauth_token`, `tailscale_auth_key` |
+| Variables | `railway_token`, `enable_project_management`, `workspace_image`, `image_registry_*`, `claude_code_oauth_token`, `tailscale_*`, `internal_ca_cert`, `jenkins_*` | `kubeconfig`, `namespace`, `storage_class`, `home_disk_size`, `cpu_limit`, `memory_limit`, `workspace_image`, `image_registry_*`, `claude_code_oauth_token`, `tailscale_*`, `internal_ca_cert`, `jenkins_*` |
 | Apps | code-server, git-clone | code-server, git-clone |
 
 Not carried over: `railway_token`, `region` and `enable_project_management` have no Kubernetes equivalent.
@@ -45,20 +45,27 @@ Optional, same as the Railway template:
 ```sh
   --variable claude_code_oauth_token=sk-ant-oat01-... \
   --variable tailscale_auth_key=tskey-auth-... \
+  --variable internal_ca_cert="$(cat dev-k8s-ca.crt)" \
+  --variable jenkins_user=... --variable jenkins_api_token=... \
   --variable image_registry_username=... --variable image_registry_password=...
 ```
 
 The kubeconfig is a sensitive template variable and is never exposed to workspace users.
 
+For later versions use `./push-template.sh kubernetes` from the repo root: `coder templates push` keeps the previous `workspace_image` unless it is passed again, and the script pins it to the image CI built for the newest commit (see [Pushing a new version](../railway/README.md#pushing-a-new-version)).
+
 ## Tailscale
 
-When `tailscale_auth_key` is set, `tailscaled` runs with a local SOCKS5 and HTTP proxy on `localhost:1055` (`--socks5-server` / `--outbound-http-proxy-listen`, both on the same port). If the node exposes `/dev/net/tun` tailscaled uses kernel networking and the tailnet is routed normally; without it, it falls back to userspace networking, where nothing in the workspace can reach the tailnet directly (`.corp` names don't resolve, the `10.0.0.0/16` subnets aren't routed) and the proxy is the way in. The proxy works in both modes. The proxy is **opt-in per command**: `ALL_PROXY`/`HTTPS_PROXY`/`HTTP_PROXY` are deliberately not set, so GitHub, npm, Composer, apt and the Coder agent keep going out directly.
+Same setup as the Railway template; [its README](../railway/README.md#tailscale) has the details. When `tailscale_auth_key` is set:
+
+- `tailscaled` runs with a SOCKS5 + HTTP proxy on `localhost:1055` and `--state=mem:`, so the node is ephemeral. A stop script logs it out, so the hostname stays `coder-<owner>-<workspace>` without `-1`, `-2` suffixes. `tailscale up` uses `--accept-routes`.
+- With `/dev/net/tun` on the node (mounted when a key is set), `tailscaled` uses kernel networking. The tailnet, its subnet routes and its DNS then work for every process, and the proxy is optional. Without it, it falls back to userspace networking: nothing is routed into the tailnet, the proxy is the way in, and the script also starts `ts-dns-forward` (names under `tailscale_dns_domains` resolved by the tailnet DNS server) and sets `TS_DEBUG_MTU=1200`.
+- The proxy is **opt-in per command** (`curl --proxy socks5h://localhost:1055 ...`). No `*_PROXY` is set globally, except for Claude Code: `/etc/claude-code/managed-settings.json` gets `HTTPS_PROXY`/`HTTP_PROXY=http://localhost:1055` and `NO_PROXY=localhost,127.0.0.1,::1,.svc,.cluster.local,<Coder access URL host>`, so its HTTP MCP servers reach the tailnet.
+- `internal_ca_cert` (system trust store + `NODE_EXTRA_CA_CERTS`) and `jenkins_user`/`jenkins_api_token` (the `jenkins` MCP server in Claude Code, with the credentials only in the agent env) work as in the Railway template.
 
 ```sh
 curl --proxy socks5h://localhost:1055 https://jenkins.dev-k8s.vicedomini.corp/login
 ```
-
-Use `socks5h://` (not `socks5://`): with the `h` the hostname is resolved by `tailscaled` on the tailnet (MagicDNS / split DNS), which is the only way `.corp` names resolve. Tools without SOCKS support can use the HTTP proxy on the same port, e.g. `HTTPS_PROXY=http://localhost:1055 some-tool ...` for a single command. `tailscale nc <host> <port>` also works for raw TCP.
 
 ## Architecture
 

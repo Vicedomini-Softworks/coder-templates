@@ -512,4 +512,8 @@ RUN apt-get update \
 COPY entrypoint.sh /coder-entrypoint.sh
 RUN chmod +x /coder-entrypoint.sh
 
+# Split DNS forwarder for tailscaled in userspace mode, started by the
+# templates' tailscale coder_script (see the script's header for why).
+COPY --chmod=755 ts-dns-forward.py /usr/local/bin/ts-dns-forward
+
 ENTRYPOINT ["/usr/local/bin/tini", "--", "/coder-entrypoint.sh"]
